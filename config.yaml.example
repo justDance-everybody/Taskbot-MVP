@@ -1,0 +1,45 @@
+# Feishu Bot Configuration
+feishu:
+  app_id: "cli_xxxxxxxxxxxxxxxxx"
+  app_secret: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  verify_token: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  encrypt_key: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  
+  # Bitable Configuration
+  bitable:
+    app_token: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    task_table_id: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    person_table_id: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+# LLM Configuration
+llm:
+  default_backend: "deepseek"
+  backends:
+    deepseek:
+      api_key: "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      base_url: "https://api.deepseek.com"
+      model: "deepseek-reasoner"
+    gemini:
+      api_key: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      model: "gemini-1.5-pro"
+    openai:
+      api_key: "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      base_url: "https://api.openai.com/v1"
+      model: "gpt-4"
+
+# GitHub Configuration
+github:
+  webhook_secret: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+# Application Configuration
+app:
+  debug: true
+  log_level: "INFO"
+  host: "0.0.0.0"
+  port: 8000
+
+# Task Configuration
+task:
+  auto_review_threshold: 80
+  max_retry_attempts: 2
+  reminder_hours: 48
