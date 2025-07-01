@@ -1,45 +1,218 @@
-# Feishu Bot Configuration
-feishu:
-  app_id: "cli_xxxxxxxxxxxxxxxxx"
-  app_secret: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-  verify_token: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-  encrypt_key: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-  
-  # Bitable Configuration
-  bitable:
-    app_token: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-    task_table_id: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-    person_table_id: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+# Task Bot MVP 配置文件示例
+# 复制为 config.yaml 并修改相应的值
 
-# LLM Configuration
-llm:
-  default_backend: "deepseek"
-  backends:
-    deepseek:
-      api_key: "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-      base_url: "https://api.deepseek.com"
-      model: "deepseek-reasoner"
-    gemini:
-      api_key: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-      model: "gemini-1.5-pro"
-    openai:
-      api_key: "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-      base_url: "https://api.openai.com/v1"
-      model: "gpt-4"
-
-# GitHub Configuration
-github:
-  webhook_secret: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-
-# Application Configuration
-app:
-  debug: true
-  log_level: "INFO"
+# 服务器配置
+server:
   host: "0.0.0.0"
   port: 8000
+  debug: false
 
-# Task Configuration
+# 飞书配置
+feishu:
+  app_id: "cli_xxxxxxxxxxxxxxxx"
+  app_secret: "your_app_secret_here"
+  verification_token: "your_verification_token"
+  encrypt_key: "your_encrypt_key"  # 可选，用于消息加密
+
+# 多维表格配置
+bitable:
+  app_token: "your_bitable_app_token"
+  # 表格ID配置
+  tables:
+    tasks: "tblxxxxxxxxxxxxxxxx"      # 任务表
+    candidates: "tblxxxxxxxxxxxxxxxx"  # 候选人表
+    users: "tblxxxxxxxxxxxxxxxx"       # 用户表
+
+# LLM配置
+llm:
+  # 默认使用的模型
+  default_provider: "deepseek"
+  
+  # 模型配置
+  providers:
+    deepseek:
+      api_key: "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      base_url: "https://api.deepseek.com"
+      model: "deepseek-chat"
+      
+    openai:
+      api_key: "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      base_url: "https://api.openai.com/v1"
+      model: "gpt-3.5-turbo"
+      
+    gemini:
+      api_key: "AIzaSyxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      model: "gemini-pro"
+
+# GitHub配置
+github:
+  # webhook签名验证密钥
+  webhook_secret: "your_github_webhook_secret"
+  
+  # GitHub Personal Access Token (用于API调用)
+  access_token: "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  
+  # 组织/用户名 (可选，用于限制仓库访问)
+  organization: "your_org_name"
+
+# 任务配置
 task:
-  auto_review_threshold: 80
-  max_retry_attempts: 2
-  reminder_hours: 48
+  # 机器人命令前缀
+  bot_prefix: "@bot"
+  
+  # 技能枚举 (用于匹配)
+  skills_enum:
+    - "Python"
+    - "JavaScript"
+    - "TypeScript"
+    - "React"
+    - "Vue.js"
+    - "Node.js"
+    - "Docker"
+    - "Kubernetes"
+    - "MySQL"
+    - "PostgreSQL"
+    - "Redis"
+    - "MongoDB"
+    - "AWS"
+    - "Azure"
+    - "GCP"
+    - "Git"
+    - "CI/CD"
+    - "Linux"
+    - "Nginx"
+    - "微服务架构"
+    - "分布式系统"
+    - "机器学习"
+    - "数据分析"
+    - "UI/UX设计"
+    - "产品设计"
+    - "项目管理"
+    - "技术写作"
+    - "SEO优化"
+
+  # LLM评分阈值
+  llm_threshold: 80
+  
+  # 候选人匹配时的最大数量
+  candidate_limit: 15
+  
+  # 最大自动返工次数
+  max_auto_returns: 2
+  
+  # 任务归档天数
+  archive_after_days: 7
+
+# CI/CD配置
+ci:
+  # 代码任务的验收方式
+  code_task_acceptance: "github_actions"
+  
+  # 支持的CI平台
+  platforms:
+    github_actions:
+      enabled: true
+      # 成功状态标识
+      success_statuses: ["success", "completed"]
+      # 失败状态标识
+      failure_statuses: ["failure", "cancelled", "timed_out"]
+      
+  # 自动完成配置
+  auto_completion:
+    # 是否启用CI自动完成
+    enabled: true
+    # 需要通过的最少检查项数量
+    min_checks_required: 3
+    # 必须通过的检查项
+    required_checks:
+      - "quality_check"
+      - "unit_tests"
+      - "build"
+
+# 通知配置
+notifications:
+  # 任务提醒配置
+  reminders:
+    # 是否启用周期过半提醒
+    enabled: true
+    # 提醒时间点 (0.5 = 周期过半)
+    reminder_ratio: 0.5
+    
+  # CI通知配置
+  ci_notifications:
+    # 是否在群组中发送CI通知
+    send_to_group: true
+    # 是否发送CI开始通知
+    notify_on_start: true
+    # 是否发送CI完成通知
+    notify_on_completion: true
+
+# 数据库配置 (可选，如果使用数据库)
+database:
+  # 数据库类型: sqlite, mysql, postgresql
+  type: "sqlite"
+  # 连接配置
+  url: "sqlite:///./task_bot.db"
+  # MySQL/PostgreSQL 配置示例
+  # url: "mysql+pymysql://user:password@localhost:3306/task_bot"
+  # url: "postgresql://user:password@localhost:5432/task_bot"
+
+# Redis配置 (可选，用于缓存和任务队列)
+redis:
+  enabled: false
+  host: "localhost"
+  port: 6379
+  db: 0
+  password: ""
+
+# 日志配置
+logging:
+  level: "INFO"
+  # 日志文件配置
+  file:
+    enabled: true
+    path: "logs/app.log"
+    max_size: "10MB"
+    backup_count: 5
+    
+  # 控制台日志
+  console:
+    enabled: true
+    format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+# 安全配置
+security:
+  # JWT密钥 (如果使用认证)
+  jwt_secret: "your-super-secret-jwt-key"
+  
+  # CORS配置
+  cors:
+    allow_origins: ["*"]  # 生产环境中应该限制
+    allow_methods: ["*"]
+    allow_headers: ["*"]
+    
+  # 请求限制
+  rate_limiting:
+    enabled: true
+    # 每分钟最大请求数
+    max_requests_per_minute: 60
+
+# 环境配置
+environment: "development"  # development, staging, production
+
+# 特性开关
+features:
+  # 是否启用PDF简历解析
+  pdf_resume_parsing: true
+  
+  # 是否启用AI任务匹配
+  ai_task_matching: true
+  
+  # 是否启用自动验收
+  auto_acceptance: true
+  
+  # 是否启用任务归档
+  task_archiving: true
+  
+  # 是否启用数据统计
+  statistics: true 

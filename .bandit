@@ -1,3 +1,0 @@
-[bandit]
-exclude_dirs = tests,venv,.venv,env,.env
-skips = B101,B601

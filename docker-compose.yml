@@ -1,20 +1,19 @@
 version: '3.8'
 
 services:
-  app:
-    build:
-      context: .
-      target: development
+  feishu-chatops:
+    build: .
+    container_name: feishu-chatops
     ports:
       - "8000:8000"
-    volumes:
-      - .:/app
-      - /app/__pycache__
     environment:
-      - DEBUG=true
-      - LOG_LEVEL=DEBUG
+      - HOST=0.0.0.0
+      - PORT=8000
+      - DEBUG=false
     env_file:
       - .env
+    volumes:
+      - ./logs:/app/logs
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -22,24 +21,13 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+    networks:
+      - chatops-network
 
-  # Redis for caching (optional)
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-
-  # Nginx reverse proxy (optional)
+  # Nginx反向代理（可选）
   nginx:
     image: nginx:alpine
+    container_name: feishu-chatops-nginx
     ports:
       - "80:80"
       - "443:443"
@@ -47,41 +35,27 @@ services:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
       - ./ssl:/etc/nginx/ssl:ro
     depends_on:
-      - app
+      - feishu-chatops
     restart: unless-stopped
+    networks:
+      - chatops-network
 
-  # Monitoring with Prometheus (optional)
-  prometheus:
-    image: prom/prometheus:latest
+  # Redis缓存（可选，用于会话管理）
+  redis:
+    image: redis:alpine
+    container_name: feishu-chatops-redis
     ports:
-      - "9090:9090"
+      - "6379:6379"
     volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheus_data:/prometheus
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--web.console.libraries=/etc/prometheus/console_libraries'
-      - '--web.console.templates=/etc/prometheus/consoles'
-      - '--web.enable-lifecycle'
+      - redis_data:/data
     restart: unless-stopped
-
-  # Grafana for visualization (optional)
-  grafana:
-    image: grafana/grafana:latest
-    ports:
-      - "3000:3000"
-    volumes:
-      - grafana_data:/var/lib/grafana
-    environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
-    restart: unless-stopped
+    networks:
+      - chatops-network
+    command: redis-server --appendonly yes
 
 volumes:
   redis_data:
-  prometheus_data:
-  grafana_data:
 
 networks:
-  default:
-    name: feishu-bot-network
+  chatops-network:
+    driver: bridge
