@@ -1,95 +1,40 @@
-# Multi-stage Dockerfile for Feishu Bot
+# 使用Python 3.9官方镜像作为基础镜像
+FROM python:3.9-slim
 
-# Build stage
-FROM python:3.11-slim as builder
+# 设置工作目录
+WORKDIR /app
 
-# Set environment variables
+# 设置环境变量
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# Install system dependencies
+# 安装系统依赖
 RUN apt-get update && apt-get install -y \
-    build-essential \
-    curl \
+    gcc \
     && rm -rf /var/lib/apt/lists/*
 
-# Create and set working directory
-WORKDIR /app
-
-# Copy requirements first for better caching
+# 复制requirements文件
 COPY requirements.txt .
 
-# Install Python dependencies
+# 安装Python依赖
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Production stage
-FROM python:3.11-slim as production
+# 复制应用代码
+COPY . .
 
-# Set environment variables
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PYTHONPATH=/app
+# 创建非root用户
+RUN useradd --create-home --shell /bin/bash app \
+    && chown -R app:app /app
+USER app
 
-# Create non-root user
-RUN groupadd -r appuser && useradd -r -g appuser appuser
+# 暴露端口
+EXPOSE 8000
 
-# Install runtime dependencies
-RUN apt-get update && apt-get install -y \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
-
-# Create app directory
-WORKDIR /app
-
-# Copy Python dependencies from builder stage
-COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
-COPY --from=builder /usr/local/bin /usr/local/bin
-
-# Copy application code
-COPY app/ ./app/
-COPY prompts/ ./prompts/
-COPY config.yaml.example ./config.yaml.example
-
-# Create necessary directories
-RUN mkdir -p logs && \
-    chown -R appuser:appuser /app
-
-# Switch to non-root user
-USER appuser
-
-# Health check
+# 健康检查
 HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-# Expose port
-EXPOSE 8000
-
-# Default command
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
-
-# Development stage
-FROM production as development
-
-# Switch back to root for development tools
-USER root
-
-# Install development dependencies
-COPY requirements-dev.txt .
-RUN pip install --no-cache-dir -r requirements-dev.txt
-
-# Install additional development tools
-RUN apt-get update && apt-get install -y \
-    git \
-    vim \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy test files
-COPY tests/ ./tests/
-
-# Switch back to appuser
-USER appuser
-
-# Development command with auto-reload
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+# 启动命令
+CMD ["python", "main.py"]

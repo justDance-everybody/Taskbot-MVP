@@ -1,0 +1,27 @@
+{
+  "date": "2025-07-01",
+  "total_tasks": 5,
+  "completed_tasks": 2,
+  "pending_tasks": 2,
+  "in_progress_tasks": 1,
+  "submitted_tasks": 0,
+  "rejected_tasks": 0,
+  "average_score": 85.5,
+  "completion_rate": 40.0,
+  "tasks_by_status": {
+    "published": 0,
+    "in_progress": 1,
+    "submitted": 0,
+    "reviewing": 0,
+    "completed": 2,
+    "rejected": 0
+  },
+  "top_performers": [
+    {
+      "name": "test_user",
+      "score": 90,
+      "task_title": "测试任务"
+    }
+  ],
+  "last_updated": "2025-07-01T15:13:21.404882"
+}

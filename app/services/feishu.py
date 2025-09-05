@@ -1,501 +1,334 @@
-"""
-Feishu service module
-Handles message sending, receiving, group management, and event processing
-"""
-
-import json
+"""飞书服务模块"""
 import logging
-from typing import Dict, List, Any, Optional, Union
+from typing import List, Dict, Any, Optional
+import json
 from datetime import datetime
-
-import lark_oapi as lark
-from lark_oapi.api.im.v1 import (
-    CreateMessageRequest,
-    CreateMessageRequestBody,
-    ReplyMessageRequest,
-    ReplyMessageRequestBody,
-    CreateChatRequest,
-    CreateChatRequestBody,
-    CreateChatMembersRequest,
-    CreateChatMembersRequestBody
-)
-from lark_oapi.api.contact.v3 import GetUserRequest
-
-from ..config import get_settings
+try:
+    import lark_oapi as lark
+    from lark_oapi.api.im.v1 import *
+    LARK_SDK_AVAILABLE = True
+except ImportError:
+    LARK_SDK_AVAILABLE = False
+    logger = logging.getLogger(__name__)
+    logger.warning("Lark SDK not available")
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-
-class MessageType:
-    """Message types"""
-    TEXT = "text"
-    POST = "post"
-    IMAGE = "image"
-    FILE = "file"
-    AUDIO = "audio"
-    MEDIA = "media"
-    STICKER = "sticker"
-    INTERACTIVE = "interactive"
-    SHARE_CHAT = "share_chat"
-    SHARE_USER = "share_user"
-
-
 class FeishuService:
-    """Feishu service for handling messages and chats"""
-    
     def __init__(self):
-        self.settings = get_settings()
+        self.app_id = settings.feishu_app_id
+        self.app_secret = settings.feishu_app_secret
+        
+        if not LARK_SDK_AVAILABLE:
+            raise ImportError("Lark SDK is required but not available. Please install lark-oapi package.")
+        
+        if not self.app_id or not self.app_secret:
+            raise ValueError("Feishu app_id and app_secret are required")
+        
+        # 使用真实的飞书SDK，设置默认user_id_type
         self.client = lark.Client.builder() \
-            .app_id(self.settings.feishu.app_id) \
-            .app_secret(self.settings.feishu.app_secret) \
-            .log_level(lark.LogLevel.DEBUG if self.settings.app.debug else lark.LogLevel.INFO) \
+            .app_id(self.app_id) \
+            .app_secret(self.app_secret) \
+            .log_level(lark.LogLevel.DEBUG) \
             .build()
+        
+        logger.info("FeishuService initialized with real Lark SDK")
     
-    async def send_message(self, receive_id: str, msg_type: str, content: Union[str, Dict],
-                          receive_id_type: str = "chat_id", reply_to_message_id: Optional[str] = None) -> str:
-        """Send a message to a chat or user, optionally as a reply"""
+    async def send_message(self, user_id: str, message: str):
+        """发送消息给用户"""
         try:
-            # 准备消息内容
-            if msg_type == MessageType.TEXT and isinstance(content, str):
-                content = {"text": content}
-            elif msg_type == MessageType.POST and isinstance(content, dict):
-                # Content is already a rich text object
-                pass
-            elif msg_type == MessageType.INTERACTIVE and isinstance(content, dict):
-                # Content is already an interactive card object
-                pass
-
-            # 如果是回复消息，使用专门的回复API
-            if reply_to_message_id:
-                return await self._send_reply_message(reply_to_message_id, msg_type, content)
-
-            # 普通消息发送
-            request_body = CreateMessageRequestBody.builder() \
-                .receive_id(receive_id) \
-                .msg_type(msg_type) \
-                .content(json.dumps(content)) \
-                .build()
-
+            # 构建消息体
             request = CreateMessageRequest.builder() \
-                .receive_id_type(receive_id_type) \
-                .request_body(request_body) \
+                .receive_id_type("user_id") \
+                .request_body(CreateMessageRequestBody.builder()
+                    .receive_id(user_id)
+                    .msg_type("text")
+                    .content(json.dumps({"text": message}, ensure_ascii=False))
+                    .build()) \
                 .build()
-
-            # 发送请求
+            
+            # 发送消息
             response = self.client.im.v1.message.create(request)
-
+            
             if not response.success():
-                logger.error(f"Failed to send message: {response.msg}")
-                raise Exception(f"Failed to send message: {response.msg}")
-
-            message_id = response.data.message_id
-            logger.info(f"Sent message with ID: {message_id}")
-            return message_id
-
-        except Exception as e:
-            logger.error(f"Error sending message: {e}")
-            raise
-
-    async def _send_reply_message(self, parent_message_id: str, msg_type: str, content: Dict) -> str:
-        """Send a reply message using the reply API"""
-        try:
-            # 构建回复请求
-            request_body = ReplyMessageRequestBody.builder() \
-                .msg_type(msg_type) \
-                .content(json.dumps(content)) \
-                .build()
-
-            request = ReplyMessageRequest.builder() \
-                .message_id(parent_message_id) \
-                .request_body(request_body) \
-                .build()
-
-            # 发送回复请求
-            response = self.client.im.v1.message.reply(request)
-
-            if not response.success():
-                logger.error(f"Failed to send reply message: {response.msg}")
-                raise Exception(f"Failed to send reply message: {response.msg}")
-
-            message_id = response.data.message_id
-            logger.info(f"Sent reply message with ID: {message_id} (reply_to: {parent_message_id})")
-            return message_id
-
-        except Exception as e:
-            logger.error(f"Error sending reply message: {e}")
-            raise
-    
-    async def send_text_message(self, receive_id: str, text: str,
-                               receive_id_type: str = "chat_id", reply_to_message_id: Optional[str] = None) -> str:
-        """Send a text message, optionally as a reply"""
-        return await self.send_message(receive_id, MessageType.TEXT, text, receive_id_type, reply_to_message_id)
-    
-    async def send_interactive_card(self, receive_id: str, card: Dict[str, Any],
-                                   receive_id_type: str = "chat_id", reply_to_message_id: Optional[str] = None) -> str:
-        """Send an interactive card message, optionally as a reply"""
-        return await self.send_message(receive_id, MessageType.INTERACTIVE, card, receive_id_type, reply_to_message_id)
-    
-    async def create_group_chat(self, name: str, description: str,
-                               user_ids: List[str]) -> str:
-        """Create a new group chat"""
-        try:
-            # 构建请求
-            request = CreateChatRequest.builder() \
-                .request_body(CreateChatRequestBody.builder()
-                    .name(name)
-                    .description(description)
-                    .chat_mode("group")
-                    .chat_type("private")
-                    .owner_id(user_ids[0] if user_ids else None)
-                    .user_id_list(user_ids)
-                    .build()) \
-                .build()
-
-            # 发送请求
-            response = self.client.im.v1.chat.create(request)
-
-            if not response.success():
-                logger.error(f"Failed to create group chat: {response.msg}")
-                raise Exception(f"Failed to create group chat: {response.msg}")
-
-            chat_id = response.data.chat_id
-            logger.info(f"Created group chat {name} with ID: {chat_id}")
-            return chat_id
-
-        except Exception as e:
-            logger.error(f"Error creating group chat: {e}")
-            raise
-    
-    async def add_chat_members(self, chat_id: str, user_ids: List[str]) -> bool:
-        """Add members to a chat"""
-        try:
-            # 构建请求
-            request = CreateChatMembersRequest.builder() \
-                .chat_id(chat_id) \
-                .request_body(CreateChatMembersRequestBody.builder()
-                    .id_list(user_ids)
-                    .build()) \
-                .build()
-
-            # 发送请求
-            response = self.client.im.v1.chat_members.create(request)
-
-            if not response.success():
-                logger.error(f"Failed to add chat members: {response.msg}")
-                raise Exception(f"Failed to add chat members: {response.msg}")
-
-            logger.info(f"Added {len(user_ids)} members to chat {chat_id}")
+                logger.error(f"发送消息失败: {response.msg}")
+                return False
+            
+            logger.info(f"消息发送成功给用户 {user_id}")
             return True
-
+            
         except Exception as e:
-            logger.error(f"Error adding chat members: {e}")
-            raise
+            logger.error(f"发送消息异常: {str(e)}")
+            return False
     
-    async def get_user_info(self, user_id: str) -> Dict[str, Any]:
-        """Get user information"""
+    async def send_message_to_chat(self, chat_id: str, message: str):
+        """发送消息到聊天群组"""
         try:
-            # 构建请求
-            request = GetUserRequest.builder() \
-                .user_id(user_id) \
-                .user_id_type("user_id") \
+            # 构建消息体
+            request = CreateMessageRequest.builder() \
+                .receive_id_type("chat_id") \
+                .request_body(CreateMessageRequestBody.builder()
+                    .receive_id(chat_id)
+                    .msg_type("text")
+                    .content(json.dumps({"text": message}, ensure_ascii=False))
+                    .build()) \
                 .build()
-
-            # 发送请求
-            response = self.client.contact.v3.user.get(request)
-
+            
+            # 发送消息
+            response = self.client.im.v1.message.create(request)
+            
             if not response.success():
-                logger.error(f"Failed to get user info: {response.msg}")
-                raise Exception(f"Failed to get user info: {response.msg}")
-
-            user = response.data.user
-            return {
-                "user_id": user.user_id,
-                "name": user.name,
-                "en_name": user.en_name,
-                "email": user.email,
-                "mobile": user.mobile,
-                "status": user.status
-            }
-
+                logger.error(f"发送消息到聊天群组失败: {response.msg}")
+                return False
+            
+            logger.info(f"消息发送成功到聊天群组 {chat_id}")
+            return True
+            
         except Exception as e:
-            logger.error(f"Error getting user info: {e}")
-            raise
+            logger.error(f"发送消息到聊天群组异常: {str(e)}")
+            return False
     
-    def create_task_selection_card(self, task_title: str, task_description: str, 
-                                  candidates: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Create an interactive card for task assignment"""
-        elements = [
-            {
-                "tag": "div",
-                "text": {
-                    "tag": "lark_md",
-                    "content": f"**新任务：{task_title}**\n\n{task_description}"
-                }
-            },
-            {
-                "tag": "hr"
-            },
-            {
-                "tag": "div",
-                "text": {
-                    "tag": "lark_md",
-                    "content": "**推荐候选人 Top-3：**"
-                }
-            }
-        ]
-        
-        # Add candidate buttons
-        for i, candidate in enumerate(candidates[:3], 1):
-            elements.append({
-                "tag": "div",
-                "fields": [
+    async def send_text_message(self, user_id: str = None, text: str = "", chat_id: str = None):
+        """发送文本消息给用户或聊天群组"""
+        if chat_id:
+            return await self.send_message_to_chat(chat_id, text)
+        elif user_id:
+            return await self.send_message(user_id, text)
+        else:
+            logger.error("必须提供user_id或chat_id")
+            return False
+    
+    async def send_candidate_cards(self, chat_id: str, candidates: List[Dict[str, Any]], task_id: str) -> bool:
+        """发送候选人卡片消息"""
+        try:
+            # 构建候选人卡片内容
+            card_content = {
+                "config": {
+                    "wide_screen_mode": True
+                },
+                "elements": [
                     {
-                        "is_short": True,
+                        "tag": "div",
                         "text": {
-                            "tag": "lark_md",
-                            "content": f"**{i}. {candidate['name']}**"
-                        }
-                    },
-                    {
-                        "is_short": True,
-                        "text": {
-                            "tag": "lark_md",
-                            "content": f"匹配度: {candidate.get('match_score', 0)}%"
+                            "content": f"**任务ID: {task_id}**\n推荐候选人:",
+                            "tag": "lark_md"
                         }
                     }
                 ]
-            })
-            
-            elements.append({
-                "tag": "div",
-                "text": {
-                    "tag": "lark_md",
-                    "content": f"技能: {', '.join(candidate.get('skill_tags', []))}"
-                }
-            })
-            
-            elements.append({
-                "tag": "action",
-                "actions": [
-                    {
-                        "tag": "button",
-                        "text": {
-                            "tag": "plain_text",
-                            "content": f"✅ 选择 {candidate['name']}"
-                        },
-                        "type": "primary",
-                        "value": {
-                            "action": "select_candidate",
-                            "user_id": candidate["user_id"],
-                            "task_id": task_title  # This should be the actual task ID
-                        }
-                    }
-                ]
-            })
-            
-            if i < len(candidates[:3]):
-                elements.append({"tag": "hr"})
-        
-        return {
-            "config": {
-                "wide_screen_mode": True
-            },
-            "elements": elements
-        }
-    
-    def create_task_result_card(self, task_title: str, status: str, 
-                               message: str, details: Optional[str] = None) -> Dict[str, Any]:
-        """Create a card for task completion results"""
-        color = "green" if status == "success" else "red"
-        emoji = "🎉" if status == "success" else "❌"
-        
-        elements = [
-            {
-                "tag": "div",
-                "text": {
-                    "tag": "lark_md",
-                    "content": f"**{emoji} 任务结果**"
-                }
-            },
-            {
-                "tag": "div",
-                "text": {
-                    "tag": "lark_md",
-                    "content": f"**任务：** {task_title}"
-                }
-            },
-            {
-                "tag": "div",
-                "text": {
-                    "tag": "lark_md",
-                    "content": f"**状态：** {message}"
-                }
             }
-        ]
-        
-        if details:
-            elements.extend([
-                {"tag": "hr"},
-                {
+            
+            # 添加候选人信息
+            for i, candidate in enumerate(candidates[:3]):
+                card_content["elements"].append({
                     "tag": "div",
                     "text": {
-                        "tag": "lark_md",
-                        "content": f"**详情：**\n{details}"
+                        "content": f"{i+1}. {candidate.get('name', 'Unknown')} - 技能: {', '.join(candidate.get('skills', []))}",
+                        "tag": "lark_md"
                     }
-                }
-            ])
-        
-        return {
-            "config": {
-                "wide_screen_mode": True
-            },
-            "elements": elements
-        }
-
-    def parse_message_event(self, event_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Parse message event from webhook"""
-        try:
-            event = event_data.get("event", {})
-            if not event:
-                return None
-
-            message = event.get("message", {})
-            sender = event.get("sender", {})
-
-            return {
-                "message_id": message.get("message_id"),
-                "chat_id": message.get("chat_id"),
-                "chat_type": message.get("chat_type"),
-                "message_type": message.get("message_type"),
-                "content": message.get("content"),
-                "sender_id": sender.get("sender_id", {}).get("user_id"),
-                "sender_type": sender.get("sender_type"),
-                "create_time": message.get("create_time")
-            }
-
+                })
+            
+            request = CreateMessageRequest.builder() \
+                .receive_id_type("chat_id") \
+                .request_body(CreateMessageRequestBody.builder()
+                    .receive_id(chat_id)
+                    .msg_type("interactive")
+                    .content(json.dumps(card_content))
+                    .build()) \
+                .build()
+            
+            response = self.client.im.v1.message.create(request)
+            
+            if response.success():
+                logger.info(f"Candidate cards sent successfully to {chat_id} for task {task_id}")
+                return True
+            else:
+                logger.error(f"Failed to send candidate cards: {response.code} - {response.msg}")
+                return False
+                
         except Exception as e:
-            logger.error(f"Error parsing message event: {e}")
-            return None
-
-    def parse_card_action_event(self, event_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Parse card action event from webhook"""
+            logger.error(f"Error sending candidate cards: {str(e)}")
+            return False
+    
+    async def send_task_notification(self, user_id: str, task_data: Dict[str, Any]) -> bool:
+        """发送任务通知"""
         try:
-            event = event_data.get("event", {})
-            if not event:
-                return None
-
-            action = event.get("action", {})
-            user = event.get("user", {})
-
-            return {
-                "message_id": event.get("message_id"),
-                "chat_id": event.get("chat_id"),
-                "action_value": action.get("value"),
-                "action_tag": action.get("tag"),
-                "user_id": user.get("user_id"),
-                "timestamp": event.get("timestamp")
+            # 构建任务通知卡片
+            card_content = {
+                "config": {
+                    "wide_screen_mode": True
+                },
+                "elements": [
+                    {
+                        "tag": "div",
+                        "text": {
+                            "content": f"**新任务通知**\n任务: {task_data.get('title', '')}\n描述: {task_data.get('description', '')}\n截止时间: {task_data.get('deadline', '')}\n优先级: {task_data.get('priority', 'medium')}",
+                            "tag": "lark_md"
+                        }
+                    }
+                ]
             }
-
+            
+            request = CreateMessageRequest.builder() \
+                .receive_id_type("user_id") \
+                .request_body(CreateMessageRequestBody.builder()
+                    .receive_id(user_id)
+                    .msg_type("interactive")
+                    .content(json.dumps(card_content))
+                    .build()) \
+                .build()
+            
+            response = self.client.im.v1.message.create(request)
+            
+            if response.success():
+                logger.info(f"Task notification sent successfully to {user_id}")
+                return True
+            else:
+                logger.error(f"Failed to send task notification: {response.code} - {response.msg}")
+                return False
+                
         except Exception as e:
-            logger.error(f"Error parsing card action event: {e}")
-            return None
-
-    def is_bot_mentioned(self, content: str) -> bool:
-        """Check if bot is mentioned in the message"""
-        # This is a simplified check - in practice you might want to check for @bot_name
-        return "@bot" in content.lower() or "新任务" in content
-
-    def clean_mention_text(self, content: str) -> str:
-        """Clean mention text from message content"""
-        import re
-        # 移除@机器人相关的文本
-        cleaned = re.sub(r'@[^\s]*\s*', '', content)
-        cleaned = re.sub(r'@_user_\d+\s*', '', cleaned)
-        cleaned = cleaned.strip()
-        return cleaned
-
-    def extract_task_from_message(self, content: str) -> Optional[Dict[str, Any]]:
-        """Extract task information from message content"""
+            logger.error(f"Error sending task notification: {str(e)}")
+            return False
+    
+    async def send_card_message(self, user_id: str = None, card: Dict[str, Any] = None, chat_id: str = None) -> bool:
+        """发送交互式卡片消息"""
         try:
-            # Simple parsing - in practice you might want more sophisticated NLP
-            if "新任务" not in content:
-                return None
-
-            # Extract task details using simple string parsing
-            lines = content.split('\n')
-            task_info = {
-                "title": "",
-                "description": "",
-                "skill_tags": [],
-                "deadline": None
-            }
-
-            for line in lines:
-                line = line.strip()
-                if line.startswith("标题:") or line.startswith("任务:"):
-                    task_info["title"] = line.split(":", 1)[1].strip()
-                elif line.startswith("描述:") or line.startswith("说明:"):
-                    task_info["description"] = line.split(":", 1)[1].strip()
-                elif line.startswith("技能:") or line.startswith("要求:"):
-                    skills_str = line.split(":", 1)[1].strip()
-                    task_info["skill_tags"] = [s.strip() for s in skills_str.split(",")]
-                elif line.startswith("截止:") or line.startswith("deadline:"):
-                    # Simple date parsing - you might want to use dateutil for better parsing
-                    deadline_str = line.split(":", 1)[1].strip()
-                    task_info["deadline"] = deadline_str
-
-            # If no structured format, use the whole content as description
-            if not task_info["title"] and not task_info["description"]:
-                # Remove @bot mentions and "新任务" prefix
-                clean_content = content.replace("@bot", "").replace("新任务", "").strip()
-                task_info["description"] = clean_content
-                task_info["title"] = clean_content[:50] + "..." if len(clean_content) > 50 else clean_content
-
-            return task_info if task_info["title"] or task_info["description"] else None
-
+            if not card:
+                logger.error("卡片内容不能为空")
+                return False
+            
+            # 确定接收者类型和ID
+            if chat_id:
+                receive_id_type = "chat_id"
+                receive_id = chat_id
+            elif user_id:
+                receive_id_type = "user_id"
+                receive_id = user_id
+            else:
+                logger.error("必须提供user_id或chat_id")
+                return False
+            
+            request = CreateMessageRequest.builder() \
+                .receive_id_type(receive_id_type) \
+                .request_body(CreateMessageRequestBody.builder()
+                    .receive_id(receive_id)
+                    .msg_type("interactive")
+                    .content(json.dumps(card, ensure_ascii=False))
+                    .build()) \
+                .build()
+            
+            response = self.client.im.v1.message.create(request)
+            
+            if response.success():
+                logger.info(f"交互式卡片发送成功到 {receive_id_type}: {receive_id}")
+                return True
+            else:
+                logger.error(f"发送交互式卡片失败: {response.code} - {response.msg}")
+                return False
+                
         except Exception as e:
-            logger.error(f"Error extracting task from message: {e}")
+            logger.error(f"发送交互式卡片异常: {str(e)}")
+            return False
+    
+    # 用户信息和群聊成员相关方法已移除，如需要请重新实现
+    
+    async def create_chat(self, name: str, members: List[str]) -> Optional[str]:
+        """创建群聊"""
+        try:
+            import httpx
+            
+            logger.info(f"开始创建群聊: {name}，成员: {members}")
+            
+            # 获取访问令牌
+            access_token = await self._get_access_token()
+            if not access_token:
+                logger.error("无法获取访问令牌")
+                return None
+            
+            # 构建请求体
+            payload = {
+                "name": name,
+                "description": f"任务协作群 - {name}",
+                "user_id_list": members,
+                "chat_mode": "group",
+                "chat_type": "private"
+            }
+            
+            # 构建请求头
+            headers = {
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json; charset=utf-8"
+            }
+            
+            # 构建URL，明确设置user_id_type查询参数
+            url = "https://open.feishu.cn/open-apis/im/v1/chats?user_id_type=user_id"
+            
+            # 发送HTTP请求
+            async with httpx.AsyncClient() as client:
+                response = await client.post(url, headers=headers, json=payload)
+                
+                logger.info(f"群聊创建API调用: {url}")
+                logger.info(f"请求体: {payload}")
+                logger.info(f"响应状态: {response.status_code}")
+                logger.info(f"响应内容: {response.text}")
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    if result.get('code') == 0:
+                        chat_id = result['data']['chat_id']
+                        logger.info(f"群聊创建成功: {name}, chat_id: {chat_id}")
+                        return chat_id
+                    else:
+                        logger.error(f"群聊创建失败: {result.get('code')} - {result.get('msg')}")
+                        return None
+                else:
+                    logger.error(f"HTTP请求失败: {response.status_code} - {response.text}")
+                    return None
+                
+        except Exception as e:
+            logger.error(f"创建群聊异常: {str(e)}")
             return None
+    
+    async def _get_access_token(self) -> Optional[str]:
+        """获取访问令牌"""
+        try:
+            import httpx
+            
+            url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
+            
+            payload = {
+                "app_id": self.app_id,
+                "app_secret": self.app_secret
+            }
+            
+            headers = {
+                "Content-Type": "application/json; charset=utf-8"
+            }
+            
+            async with httpx.AsyncClient() as client:
+                response = await client.post(url, headers=headers, json=payload)
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    if result.get('code') == 0:
+                        return result['tenant_access_token']
+                    else:
+                        logger.error(f"获取访问令牌失败: {result.get('msg')}")
+                        return None
+                else:
+                    logger.error(f"获取访问令牌HTTP请求失败: {response.status_code}")
+                    return None
+                    
+        except Exception as e:
+            logger.error(f"获取访问令牌异常: {str(e)}")
+            return None
+    
+    # 以下方法已移除，如需要请重新实现：
+    # - send_approval_card: 发送审批卡片
+    # - handle_card_action: 处理卡片交互动作  
+    # - send_daily_report: 发送日报
+    # - get_message_history: 获取消息历史
 
-    async def send_daily_report(self, chat_id: str, stats: Dict[str, int]) -> str:
-        """Send daily task statistics report"""
-        total = stats.get("total", 0)
-        done = stats.get("done", 0)
-        in_progress = stats.get("in_progress", 0)
-        returned = stats.get("returned", 0)
-
-        completion_rate = (done / total * 100) if total > 0 else 0
-
-        report_content = f"""**📊 今日任务统计报告**
-
-**总览：**
-• 总任务数：{total}
-• 已完成：{done}
-• 进行中：{in_progress}
-• 已退回：{returned}
-• 完成率：{completion_rate:.1f}%
-
-**状态分布：**
-• 草稿：{stats.get('draft', 0)}
-• 已分配：{stats.get('assigned', 0)}
-• 进行中：{stats.get('in_progress', 0)}
-• 已退回：{stats.get('returned', 0)}
-• 已完成：{stats.get('done', 0)}
-• 已归档：{stats.get('archived', 0)}
-
----
-*报告生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*"""
-
-        return await self.send_text_message(chat_id, report_content)
-
-
-# Global feishu service instance
-_feishu_service: Optional[FeishuService] = None
-
-
-def get_feishu_service() -> FeishuService:
-    """Get global feishu service instance"""
-    global _feishu_service
-    if _feishu_service is None:
-        _feishu_service = FeishuService()
-    return _feishu_service
+# 创建全局实例
+feishu_service = FeishuService()
