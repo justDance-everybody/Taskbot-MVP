@@ -1,27 +1,37 @@
 {
-  "date": "2025-07-01",
-  "total_tasks": 5,
-  "completed_tasks": 2,
-  "pending_tasks": 2,
-  "in_progress_tasks": 1,
+  "date": "2026-01-06",
+  "total_tasks": 12,
+  "completed_tasks": 0,
+  "pending_tasks": 4,
+  "in_progress_tasks": 0,
   "submitted_tasks": 0,
   "rejected_tasks": 0,
-  "average_score": 85.5,
-  "completion_rate": 40.0,
+  "average_score": 0,
+  "completion_rate": 0.0,
   "tasks_by_status": {
     "published": 0,
-    "in_progress": 1,
+    "in_progress": 0,
     "submitted": 0,
     "reviewing": 0,
-    "completed": 2,
+    "completed": 0,
     "rejected": 0
   },
-  "top_performers": [
-    {
-      "name": "test_user",
-      "score": 90,
-      "task_title": "测试任务"
-    }
-  ],
-  "last_updated": "2025-07-01T15:13:21.404882"
+  "top_performers": [],
+  "last_updated": "2026-01-06T23:10:49.342954",
+  "reviewing_tasks": 0,
+  "assigned_tasks": 0,
+  "cancelled_tasks": 0,
+  "tasks_by_urgency": {
+    "urgent": 0,
+    "high": 1,
+    "normal": 3,
+    "low": 0
+  },
+  "today_created": 4,
+  "today_completed": 0,
+  "database_info": {
+    "total_records": 12,
+    "valid_records": 12,
+    "empty_records": 0
+  }
 }

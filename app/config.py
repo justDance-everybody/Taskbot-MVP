@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     # LLM 模型配置
     deepseek_key: Optional[str] = None
     gemini_key: Optional[str] = None
+    gemini_model: str = "gemini-1.5-flash"  # Gemini 模型名称
     openai_key: Optional[str] = None
     
     # GitHub Webhook 配置
@@ -21,6 +22,7 @@ class Settings(BaseSettings):
     server_host: str = "0.0.0.0"
     server_port: int = 8000
     debug: bool = False
+    enable_websocket: bool = False  # 默认禁用WebSocket，使用Webhook模式
     
     # 飞书多维表格配置
     feishu_bitable_app_token: str

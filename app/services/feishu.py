@@ -39,8 +39,9 @@ class FeishuService:
         """发送消息给用户"""
         try:
             # 构建消息体
+            # 使用open_id类型，因为我们的user_id实际上是open_id（以ou_开头）
             request = CreateMessageRequest.builder() \
-                .receive_id_type("user_id") \
+                .receive_id_type("open_id") \
                 .request_body(CreateMessageRequestBody.builder()
                     .receive_id(user_id)
                     .msg_type("text")
@@ -169,8 +170,9 @@ class FeishuService:
                 ]
             }
             
+            # 使用open_id类型，因为我们的user_id实际上是open_id（以ou_开头）
             request = CreateMessageRequest.builder() \
-                .receive_id_type("user_id") \
+                .receive_id_type("open_id") \
                 .request_body(CreateMessageRequestBody.builder()
                     .receive_id(user_id)
                     .msg_type("interactive")
@@ -203,7 +205,8 @@ class FeishuService:
                 receive_id_type = "chat_id"
                 receive_id = chat_id
             elif user_id:
-                receive_id_type = "user_id"
+                # 使用open_id类型，因为我们的user_id实际上是open_id（以ou_开头）
+                receive_id_type = "open_id"
                 receive_id = user_id
             else:
                 logger.error("必须提供user_id或chat_id")
@@ -261,8 +264,9 @@ class FeishuService:
                 "Content-Type": "application/json; charset=utf-8"
             }
             
-            # 构建URL，明确设置user_id_type查询参数
-            url = "https://open.feishu.cn/open-apis/im/v1/chats?user_id_type=user_id"
+            # 构建URL，明确设置user_id_type查询参数为open_id
+            # 因为我们使用的是open_id（以ou_开头），而不是内部user_id
+            url = "https://open.feishu.cn/open-apis/im/v1/chats?user_id_type=open_id"
             
             # 发送HTTP请求
             async with httpx.AsyncClient() as client:

@@ -5,7 +5,7 @@ from typing import List, Dict, Any, Optional
 from enum import Enum
 import asyncio
 from app.config import settings
-from app.bitable import FeishuBitableClient, bitable_client
+from app.bitable import BitableClient
 from app.services.feishu import FeishuService
 from app.services.llm import llm_service
 from app.services.match import MatchService
@@ -34,8 +34,27 @@ class TaskManager:
     """任务管理器"""
     
     def __init__(self):
-        self.bitable = bitable_client
+        self.bitable = BitableClient()
         self.feishu = FeishuService()
+    
+    def _extract_user_id(self, user_field: Any) -> Optional[str]:
+        """从用户字段中提取user_id（支持多种格式）"""
+        try:
+            if isinstance(user_field, str):
+                return user_field
+            elif isinstance(user_field, list) and len(user_field) > 0:
+                # 列表格式，取第一个用户
+                first_user = user_field[0]
+                if isinstance(first_user, dict):
+                    return first_user.get('id') or first_user.get('open_id') or first_user.get('user_id')
+                elif isinstance(first_user, str):
+                    return first_user
+            elif isinstance(user_field, dict):
+                return user_field.get('id') or user_field.get('open_id') or user_field.get('user_id')
+            return None
+        except Exception as e:
+            logger.error(f"Error extracting user_id: {str(e)}")
+            return None
     
     async def create_task(self, task_data: Dict[str, Any]) -> str:
         """创建新任务"""
@@ -90,13 +109,12 @@ class TaskManager:
             # 发送任务邀请给Top-3候选人
             for i, match in enumerate(matches[:3]):
                 user_id = match['user_id']
-                match_score = match['match_score']
                 reason = match.get('reason', '')
                 
                 # 发送任务邀请
                 await self.feishu.send_message(
                     user_id=user_id,
-                    message=f"您好！有一个新任务邀请：\n\n任务：{task_data['title']}\n描述：{task_data['description']}\n截止时间：{task_data['deadline']}\n匹配度：{match_score}%\n推荐理由：{reason}\n\n您在候选人中排名第{i + 1}位，是否接受此任务？"
+                    message=f"您好！有一个新任务邀请：\n\n任务：{task_data['title']}\n描述：{task_data['description']}\n截止时间：{task_data['deadline']}\n推荐理由：{reason}\n\n您在候选人中排名第{i + 1}位，是否接受此任务？"
                 )
                 
                 logger.info(f"Task invitation sent to {user_id} for task {task_id}")
@@ -158,7 +176,7 @@ class TaskManager:
             return False
     
     async def submit_task(self, task_id: str, user_id: str, submission_url: str, 
-                         submission_note: str = "") -> bool:
+                         submission_note: str = "", chat_id: str = None) -> bool:
         """提交任务"""
         try:
             # 获取任务信息
@@ -166,26 +184,36 @@ class TaskManager:
             if not task:
                 raise ValueError(f"Task {task_id} not found")
             
-            # 检查任务状态和权限
-            if task['status'] != TaskStatus.IN_PROGRESS.value:
-                raise ValueError(f"Task {task_id} is not in progress")
+            # 检查任务状态和权限 - 允许从assigned或in_progress状态提交
+            current_status = task.get('status', task.get('任务状态', ''))
+            if current_status not in [TaskStatus.ASSIGNED.value, TaskStatus.IN_PROGRESS.value]:
+                raise ValueError(f"Task {task_id} cannot be submitted from status: {current_status}")
             
-            if task.get('assignee') != user_id:
+            # 检查是否有分配人（支持中英文字段名）
+            assignee = task.get('assignee') or task.get('分配给')
+            if assignee and assignee != user_id:
                 raise ValueError(f"User {user_id} is not assigned to task {task_id}")
             
-            # 更新任务状态
-            await self.bitable.update_task(task_id, {
+            # 更新任务状态，记录提交者和聊天ID
+            update_data = {
                 'status': TaskStatus.SUBMITTED.value,
                 'submission_url': submission_url,
                 'submission_note': submission_note,
-                'submitted_at': datetime.now().isoformat()
-            })
+                'submitted_at': datetime.now().isoformat(),
+                'submitted_by': user_id  # 记录提交者
+            }
+            
+            # 如果提供了chat_id，也记录下来
+            if chat_id:
+                update_data['submission_chat_id'] = chat_id
+            
+            await self.bitable.update_task(task_id, update_data)
             
             # 更新本地统计
             await self._update_daily_stats()
             
-            # 自动质量检查
-            await self._auto_quality_check(task_id, task, submission_url)
+            # 自动质量检查 - 传递提交者和chat_id信息
+            await self._auto_quality_check(task_id, task, submission_url, user_id, chat_id)
             
             logger.info(f"Task {task_id} submitted by {user_id}")
             return True
@@ -195,7 +223,7 @@ class TaskManager:
             return False
     
     async def _auto_quality_check(self, task_id: str, task_data: Dict[str, Any], 
-                                 submission_url: str):
+                                 submission_url: str, submitted_by: str = None, chat_id: str = None):
         """自动质量检查"""
         try:
             # 更新状态为审核中
@@ -207,21 +235,27 @@ class TaskManager:
             # 使用LLM评估提交内容
             from app.services.ci import CIService
             ci_service = CIService()
+            
+            # 获取任务描述（支持中英文字段名）
+            description = task_data.get('description') or task_data.get('任务描述', '')
+            acceptance_criteria = task_data.get('acceptance_criteria', '')
+            
             score, failed_reasons = await ci_service.evaluate_submission(
-                task_description=task_data['description'],
-                acceptance_criteria=task_data.get('acceptance_criteria', ''),
+                description=description,
+                acceptance_criteria=acceptance_criteria,
                 submission_url=submission_url
             )
             
-            # 判断是否通过
-            passed = score >= settings.min_pass_score and len(failed_reasons) == 0
+            # 判断是否通过 - 使用配置的分数阈值
+            min_pass_score = getattr(settings, 'min_pass_score', settings.ai_score_threshold)
+            passed = score >= min_pass_score and len(failed_reasons) == 0
             
             if passed:
                 # 任务通过
-                await self._complete_task(task_id, task_data, score)
+                await self._complete_task(task_id, task_data, score, submitted_by, chat_id)
             else:
                 # 任务需要修改
-                await self._reject_task(task_id, task_data, score, failed_reasons)
+                await self._reject_task(task_id, task_data, score, failed_reasons, submitted_by, chat_id)
             
         except Exception as e:
             logger.error(f"Error in quality check for task {task_id}: {str(e)}")
@@ -231,11 +265,19 @@ class TaskManager:
                 'review_note': f"AI审核失败，需要人工审核: {str(e)}"
             })
     
-    async def _complete_task(self, task_id: str, task_data: Dict[str, Any], score: int):
+    async def _complete_task(self, task_id: str, task_data: Dict[str, Any], score: int, 
+                           submitted_by: str = None, chat_id: str = None):
         """完成任务"""
         try:
-            assignee = task_data.get('assignee')
+            # 获取字段值（支持中英文字段名）
+            assignee = task_data.get('assignee') or task_data.get('分配给')
+            title = task_data.get('title') or task_data.get('任务标题', '未知任务')
             reward_points = task_data.get('reward_points', 100)
+            created_by = task_data.get('created_by') or task_data.get('创建人')
+            
+            # 如果没有assignee，使用submitted_by
+            if not assignee and submitted_by:
+                assignee = submitted_by
             
             # 更新任务状态
             await self.bitable.update_task(task_id, {
@@ -257,18 +299,54 @@ class TaskManager:
                     reward_points=reward_points
                 )
             
-            # 发送完成通知
-            await self.feishu.send_message(
-                user_id=assignee,
-                message=f"恭喜！您的任务《{task_data['title']}》已通过验收。\n\n评分：{score}分\n奖励积分：{reward_points}分\n反馈：恭喜！您的任务已通过验收。"
-            )
+            # 确定通知目标
+            notification_sent = False
+            message = f"恭喜！您的任务《{title}》已通过验收。\n\n评分：{score}分\n奖励积分：{reward_points}分\n反馈：恭喜！您的任务已通过验收。"
             
-            # 通知任务创建者
-            if task_data.get('created_by'):
-                await self.feishu.send_message(
-                    user_id=task_data['created_by'],
-                    message=f"您发布的任务《{task_data['title']}》已完成！评分：{score}分"
-                )
+            # 1. 优先发送给assignee
+            if assignee:
+                try:
+                    await self.feishu.send_message(user_id=assignee, message=message)
+                    notification_sent = True
+                    logger.info(f"Completion notification sent to assignee: {assignee}")
+                except Exception as e:
+                    logger.error(f"Failed to send notification to assignee {assignee}: {str(e)}")
+            
+            # 2. 如果没有assignee或发送失败，尝试发送到chat_id
+            if not notification_sent and chat_id:
+                try:
+                    await self.feishu.send_message(chat_id=chat_id, message=message)
+                    notification_sent = True
+                    logger.info(f"Completion notification sent to chat: {chat_id}")
+                except Exception as e:
+                    logger.error(f"Failed to send notification to chat {chat_id}: {str(e)}")
+            
+            # 3. 如果还是没发送成功，尝试发送给创建者
+            if not notification_sent and created_by:
+                # 提取创建者ID（可能是列表格式）
+                creator_id = self._extract_user_id(created_by)
+                if creator_id:
+                    try:
+                        await self.feishu.send_message(user_id=creator_id, message=message)
+                        notification_sent = True
+                        logger.info(f"Completion notification sent to creator: {creator_id}")
+                    except Exception as e:
+                        logger.error(f"Failed to send notification to creator {creator_id}: {str(e)}")
+            
+            if not notification_sent:
+                logger.warning(f"No notification sent for completed task {task_id}")
+            
+            # 通知任务创建者（如果不是同一人）
+            if created_by:
+                creator_id = self._extract_user_id(created_by)
+                if creator_id and creator_id != assignee:
+                    try:
+                        await self.feishu.send_message(
+                            user_id=creator_id,
+                            message=f"您发布的任务《{title}》已完成！评分：{score}分"
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to notify creator: {str(e)}")
             
             logger.info(f"Task {task_id} completed successfully")
             
@@ -276,10 +354,17 @@ class TaskManager:
             logger.error(f"Error completing task {task_id}: {str(e)}")
     
     async def _reject_task(self, task_id: str, task_data: Dict[str, Any], 
-                          score: int, failed_reasons: List[str]):
+                          score: int, failed_reasons: List[str], submitted_by: str = None, chat_id: str = None):
         """拒绝任务"""
         try:
-            assignee = task_data.get('assignee')
+            # 获取字段值（支持中英文字段名）
+            assignee = task_data.get('assignee') or task_data.get('分配给')
+            title = task_data.get('title') or task_data.get('任务标题', '未知任务')
+            created_by = task_data.get('created_by') or task_data.get('创建人')
+            
+            # 如果没有assignee，使用submitted_by
+            if not assignee and submitted_by:
+                assignee = submitted_by
             
             # 更新任务状态
             await self.bitable.update_task(task_id, {
@@ -293,13 +378,45 @@ class TaskManager:
             # 更新本地统计
             await self._update_daily_stats()
             
-            # 发送拒绝通知
-            feedback = "任务需要修改，请根据以下建议进行调整：\n" + "\n".join(failed_reasons)
+            # 构建反馈消息
+            feedback = "任务需要修改，请根据以下建议进行调整：\n" + "\n".join(failed_reasons) if failed_reasons else "任务需要修改，请优化后重新提交。"
+            message = f"您的任务《{title}》需要修改。\n\n评分：{score}分\n反馈：{feedback}"
             
-            await self.feishu.send_message(
-                user_id=assignee,
-                message=f"您的任务《{task_data['title']}》需要修改。\n\n评分：{score}分\n反馈：{feedback}"
-            )
+            # 确定通知目标
+            notification_sent = False
+            
+            # 1. 优先发送给assignee
+            if assignee:
+                try:
+                    await self.feishu.send_message(user_id=assignee, message=message)
+                    notification_sent = True
+                    logger.info(f"Rejection notification sent to assignee: {assignee}")
+                except Exception as e:
+                    logger.error(f"Failed to send notification to assignee {assignee}: {str(e)}")
+            
+            # 2. 如果没有assignee或发送失败，尝试发送到chat_id
+            if not notification_sent and chat_id:
+                try:
+                    await self.feishu.send_message(chat_id=chat_id, message=message)
+                    notification_sent = True
+                    logger.info(f"Rejection notification sent to chat: {chat_id}")
+                except Exception as e:
+                    logger.error(f"Failed to send notification to chat {chat_id}: {str(e)}")
+            
+            # 3. 如果还是没发送成功，尝试发送给创建者
+            if not notification_sent and created_by:
+                # 提取创建者ID（可能是列表格式）
+                creator_id = self._extract_user_id(created_by)
+                if creator_id:
+                    try:
+                        await self.feishu.send_message(user_id=creator_id, message=message)
+                        notification_sent = True
+                        logger.info(f"Rejection notification sent to creator: {creator_id}")
+                    except Exception as e:
+                        logger.error(f"Failed to send notification to creator {creator_id}: {str(e)}")
+            
+            if not notification_sent:
+                logger.warning(f"No rejection notification sent for task {task_id}")
             
             logger.info(f"Task {task_id} rejected with score {score}")
             
@@ -366,7 +483,10 @@ class TaskManager:
             except Exception as e:
                 logger.error(f"从多维表格获取任务信息失败: {str(e)}")
             
-            # 3. 合并统计数据，优先使用JSON文件数据
+            # 3. 计算平均指派耗时
+            avg_assign_time = await self._calculate_average_assignment_time()
+            
+            # 4. 合并统计数据，优先使用JSON文件数据
             report = {
                 'date': base_stats.get('date', datetime.now().strftime('%Y-%m-%d')),
                 'total_tasks': base_stats.get('total_tasks', task_info.get('valid_records', 0)),
@@ -380,6 +500,7 @@ class TaskManager:
                 'cancelled_tasks': base_stats.get('cancelled_tasks', 0),
                 'average_score': base_stats.get('average_score', 0),
                 'completion_rate': base_stats.get('completion_rate', 0),
+                'average_assignment_time': avg_assign_time,
                 'tasks_by_urgency': base_stats.get('tasks_by_urgency', {
                     'urgent': 0, 'high': 0, 'normal': 0, 'low': 0
                 }),
@@ -395,7 +516,7 @@ class TaskManager:
                 }
             }
             
-            logger.info(f"日报生成成功: 总任务{report['total_tasks']}, 完成{report['completed_tasks']}")
+            logger.info(f"日报生成成功: 总任务{report['total_tasks']}, 完成{report['completed_tasks']}, 平均指派耗时{avg_assign_time}")
             return report
             
         except Exception as e:
@@ -405,7 +526,7 @@ class TaskManager:
                 'total_tasks': 0, 'completed_tasks': 0, 'pending_tasks': 0,
                 'in_progress_tasks': 0, 'submitted_tasks': 0, 'reviewing_tasks': 0,
                 'rejected_tasks': 0, 'assigned_tasks': 0, 'cancelled_tasks': 0,
-                'average_score': 0, 'completion_rate': 0,
+                'average_score': 0, 'completion_rate': 0, 'average_assignment_time': 'N/A',
                 'tasks_by_urgency': {'urgent': 0, 'high': 0, 'normal': 0, 'low': 0},
                 'today_created': 0, 'today_completed': 0, 'top_performers': [],
                 'database_operations': {
@@ -426,8 +547,8 @@ class TaskManager:
                 logger.warning("未配置任务表ID，无法获取任务信息")
                 return {'total_records': 0, 'valid_records': 0, 'empty_records': 0}
             
-            # 获取表格记录
-            result = self.bitable.get_table_records(task_table_id)
+            # 获取表格记录 - 通过 client 访问
+            result = self.bitable.client.get_table_records(task_table_id)
             records = result.get('data', {}).get('items', [])
             
             # 统计基本信息
@@ -451,6 +572,65 @@ class TaskManager:
         except Exception as e:
             logger.error(f"获取任务表信息失败: {str(e)}")
             return {'total_records': 0, 'valid_records': 0, 'empty_records': 0}
+    
+    async def _calculate_average_assignment_time(self) -> str:
+        """计算平均指派耗时"""
+        try:
+            from app.config import settings
+            from datetime import datetime
+            
+            # 获取任务表ID
+            task_table_id = getattr(settings, 'feishu_task_table_id', None)
+            if not task_table_id:
+                logger.warning("未配置任务表ID，无法计算平均指派耗时")
+                return "N/A"
+            
+            # 获取表格记录 - 通过 client 访问
+            result = self.bitable.client.get_table_records(task_table_id)
+            records = result.get('data', {}).get('items', [])
+            
+            # 计算已分配任务的平均耗时
+            assignment_times = []
+            
+            for record in records:
+                fields = record.get('fields', {})
+                status = fields.get('status', '')
+                create_time_str = fields.get('create_time', '')
+                assigned_at_str = fields.get('assigned_at', '')
+                
+                # 只统计已分配的任务
+                if status in ['assigned', 'in_progress', 'submitted', 'reviewing', 'completed'] and create_time_str and assigned_at_str:
+                    try:
+                        # 解析时间字符串
+                        create_time = datetime.fromisoformat(create_time_str.replace('Z', '+00:00'))
+                        assigned_at = datetime.fromisoformat(assigned_at_str.replace('Z', '+00:00'))
+                        
+                        # 计算时间差（小时）
+                        time_diff = (assigned_at - create_time).total_seconds() / 3600
+                        if time_diff >= 0:  # 确保时间差为正
+                            assignment_times.append(time_diff)
+                    except Exception as parse_error:
+                        logger.debug(f"解析时间失败: {str(parse_error)}")
+                        continue
+            
+            # 计算平均值
+            if assignment_times:
+                avg_hours = sum(assignment_times) / len(assignment_times)
+                
+                # 格式化输出
+                if avg_hours < 1:
+                    return f"{int(avg_hours * 60)}分钟"
+                elif avg_hours < 24:
+                    return f"{avg_hours:.1f}小时"
+                else:
+                    days = avg_hours / 24
+                    return f"{days:.1f}天"
+            else:
+                return "N/A"
+            
+        except Exception as e:
+            logger.error(f"计算平均指派耗时失败: {str(e)}")
+            return "N/A"
     
     async def _update_daily_stats(self):
         """更新本地每日统计 - 基于实际操作增量更新"""

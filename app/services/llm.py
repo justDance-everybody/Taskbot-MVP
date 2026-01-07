@@ -52,6 +52,9 @@ class DeepSeekBackend(LLMBackend):
                     logger.error(f"DeepSeek API error: {response.status_code} - {response.text}")
                     raise Exception(f"DeepSeek API error: {response.status_code}")
                     
+        except httpx.TimeoutException as e:
+            logger.error(f"DeepSeek API timeout: {str(e)}")
+            raise TimeoutError("AI延迟，请稍后重试")
         except Exception as e:
             logger.error(f"Error calling DeepSeek API: {str(e)}")
             raise
@@ -59,9 +62,10 @@ class DeepSeekBackend(LLMBackend):
 class GeminiBackend(LLMBackend):
     """Google Gemini API后端"""
     
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, model: str = "gemini-1.5-flash"):
         self.api_key = api_key
-        self.base_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent"
+        self.model = model
+        self.base_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     
     async def call(self, prompt: str, system_prompt: str = "") -> str:
         try:
@@ -77,7 +81,7 @@ class GeminiBackend(LLMBackend):
                         }],
                         "generationConfig": {
                             "temperature": 0.1,
-                            "maxOutputTokens": 2000
+                            "maxOutputTokens": 8000  # 增加到 8000
                         }
                     }
                 )
@@ -89,6 +93,9 @@ class GeminiBackend(LLMBackend):
                     logger.error(f"Gemini API error: {response.status_code} - {response.text}")
                     raise Exception(f"Gemini API error: {response.status_code}")
                     
+        except httpx.TimeoutException as e:
+            logger.error(f"Gemini API timeout: {str(e)}")
+            raise TimeoutError("AI延迟，请稍后重试")
         except Exception as e:
             logger.error(f"Error calling Gemini API: {str(e)}")
             raise
@@ -129,6 +136,9 @@ class OpenAIBackend(LLMBackend):
                     logger.error(f"OpenAI API error: {response.status_code} - {response.text}")
                     raise Exception(f"OpenAI API error: {response.status_code}")
                     
+        except httpx.TimeoutException as e:
+            logger.error(f"OpenAI API timeout: {str(e)}")
+            raise TimeoutError("AI延迟，请稍后重试")
         except Exception as e:
             logger.error(f"Error calling OpenAI API: {str(e)}")
             raise
@@ -147,8 +157,9 @@ class LLMService:
             logger.info("DeepSeek backend initialized")
         
         if settings.gemini_key:
-            self.backends['gemini'] = GeminiBackend(settings.gemini_key)
-            logger.info("Gemini backend initialized")
+            gemini_model = getattr(settings, 'gemini_model', 'gemini-1.5-flash')
+            self.backends['gemini'] = GeminiBackend(settings.gemini_key, gemini_model)
+            logger.info(f"Gemini backend initialized with model: {gemini_model}")
         
         if settings.openai_key:
             self.backends['openai'] = OpenAIBackend(settings.openai_key)
@@ -164,6 +175,7 @@ class LLMService:
         model_order.extend([m for m in self.backends.keys() if m != preferred_model])
         
         last_error = None
+        timeout_occurred = False
         
         for model_name in model_order:
             if model_name not in self.backends:
@@ -177,10 +189,19 @@ class LLMService:
                 logger.info(f"Successfully called {model_name}")
                 return result
                 
+            except TimeoutError as e:
+                timeout_occurred = True
+                last_error = e
+                logger.warning(f"Timeout calling {model_name}: {str(e)}")
+                # 继续尝试下一个模型
             except Exception as e:
                 last_error = e
                 logger.warning(f"Failed to call {model_name}: {str(e)}")
                 # 继续尝试下一个模型，不重试当前模型
+        
+        # 如果所有模型都超时，抛出友好的超时错误
+        if timeout_occurred:
+            raise TimeoutError("AI延迟，请稍后重试")
         
         raise Exception(f"All LLM backends failed. Last error: {str(last_error)}")
     
@@ -248,6 +269,10 @@ class LLMService:
                 logger.warning("Failed to parse LLM response, using fallback")
                 return self._fallback_matching(task_requirements, candidates)
                 
+        except TimeoutError as e:
+            logger.error(f"LLM timeout in candidate matching: {str(e)}")
+            # 超时时使用降级匹配算法
+            return self._fallback_matching(task_requirements, candidates)
         except Exception as e:
             logger.error(f"Error in candidate matching: {str(e)}")
             return self._fallback_matching(task_requirements, candidates)
@@ -290,6 +315,9 @@ class LLMService:
                 logger.warning("Failed to parse evaluation response")
                 return 60, ["AI评估失败，请人工审核"]
                 
+        except TimeoutError as e:
+            logger.error(f"LLM timeout in submission evaluation: {str(e)}")
+            return 60, ["AI延迟，请稍后重试或人工审核"]
         except Exception as e:
             logger.error(f"Error in submission evaluation: {str(e)}")
             return 60, ["AI评估失败，请人工审核"]
@@ -406,6 +434,12 @@ class LLMService:
                 # 返回默认数据结构
                 return self._get_default_resume_data(file_name)
                 
+        except TimeoutError as e:
+            logger.error(f"LLM timeout in PDF resume analysis: {str(e)}")
+            # 返回默认数据结构，并标记为AI延迟
+            default_data = self._get_default_resume_data(file_name)
+            default_data['work_experience'] = 'AI延迟，请稍后重试或手动补充'
+            return default_data
         except Exception as e:
             logger.error(f"PDF简历分析失败: {str(e)}")
             # 返回默认数据结构

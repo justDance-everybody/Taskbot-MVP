@@ -14,12 +14,15 @@ class MatchService:
         self.llm = llm_service
         self.bitable = bitable_client
     
-    async def find_top_candidates(self, task_data: Dict[str, Any], limit: int = 3) -> List[Dict[str, Any]]:
-        """为任务找到Top-N候选人"""
+    async def find_top_candidates(self, task_data: Dict[str, Any], limit: int = 2) -> List[Dict[str, Any]]:
+        """为任务找到Top-N候选人（默认Top-2）"""
         try:
-            # 获取所有可用候选人
+            # 获取所有可用候选人，限制候选人池最多15人
             skill_requirements = task_data.get("skill_tags", [])
-            candidates = await self.bitable.get_available_candidates(skill_requirements)
+            candidates = await self.bitable.get_available_candidates(
+                skill_requirements=skill_requirements,
+                limit=15  # PRD要求：候选人池最多15人
+            )
             
             if not candidates:
                 logger.warning("没有找到可用的候选人")

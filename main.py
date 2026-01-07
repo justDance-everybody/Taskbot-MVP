@@ -44,6 +44,17 @@ async def background_tasks():
 async def feishu_websocket_task():
     """飞书长连接任务"""
     try:
+        # 检查是否启用WebSocket
+        # 如果遇到代理问题，可以通过环境变量禁用
+        enable_websocket = settings.enable_websocket if hasattr(settings, 'enable_websocket') else False
+        
+        if not enable_websocket:
+            logger.info("WebSocket客户端已禁用，使用Webhook模式")
+            # 保持任务运行但不启动WebSocket
+            while True:
+                await asyncio.sleep(3600)
+            return
+        
         logger.info("Starting Feishu WebSocket client...")
         setup_websocket_client()
         # 保持任务运行
@@ -51,7 +62,8 @@ async def feishu_websocket_task():
             await asyncio.sleep(3600)  # 每小时检查一次
     except Exception as e:
         logger.error(f"Feishu WebSocket client error: {str(e)}")
-        raise
+        # 不要抛出异常，让服务继续运行
+        logger.info("WebSocket连接失败，但服务将继续使用Webhook模式运行")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -74,11 +86,27 @@ async def lifespan(app: FastAPI):
         logger.error(f"Failed to start task monitoring: {str(e)}")
         monitor_task = None
     
+    # 启动调度器服务
+    try:
+        from app.services.scheduler import task_scheduler
+        await task_scheduler.start()
+        logger.info("Task scheduler service started")
+    except Exception as e:
+        logger.error(f"Failed to start task scheduler: {str(e)}")
+    
     try:
         yield
     finally:
         # 关闭时执行
         logger.info("Application shutting down...")
+        
+        # 停止调度器
+        try:
+            from app.services.scheduler import task_scheduler
+            await task_scheduler.stop()
+            logger.info("Task scheduler stopped")
+        except Exception as e:
+            logger.error(f"Error stopping task scheduler: {str(e)}")
         
         # 停止任务监测
         if monitor_task:

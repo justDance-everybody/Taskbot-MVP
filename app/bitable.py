@@ -27,6 +27,45 @@ class FeishuBitableClient:
         self.table_token = table_token
         self.table_id = table_id
         self.access_token = None
+        
+        # 字段名映射（中文 -> 英文）
+        self.field_mapping = {
+            '任务ID': 'taskid',
+            '任务标题': 'title',
+            '任务描述': 'description',
+            '创建人': 'creator',
+            '创建时间': 'create_time',
+            '任务状态': 'status',
+            '技能标签': 'skilltags',
+            '截止时间': 'deadline',
+            '紧急程度': 'urgency',
+            '分配给': 'assignee',
+            '最终评分': 'final_score',
+            '完成时间': 'completed_at'
+        }
+    
+    def _get_field_value(self, fields: dict, field_name: str, default: Any = None) -> Any:
+        """获取字段值，支持中英文字段名
+        
+        Args:
+            fields: 字段字典
+            field_name: 字段名（中文或英文）
+            default: 默认值
+            
+        Returns:
+            字段值
+        """
+        # 如果是中文字段名，先尝试中文，再尝试对应的英文
+        if field_name in self.field_mapping:
+            return fields.get(field_name) or fields.get(self.field_mapping[field_name], default)
+        
+        # 如果是英文字段名，先尝试英文，再尝试对应的中文
+        reverse_mapping = {v: k for k, v in self.field_mapping.items()}
+        if field_name in reverse_mapping:
+            return fields.get(field_name) or fields.get(reverse_mapping[field_name], default)
+        
+        # 都不是，直接获取
+        return fields.get(field_name, default)
 
     def _get_access_token(self):
         """获取飞书访问令牌"""
@@ -525,6 +564,45 @@ class BitableClient:
         """
         # 全局客户端实例会在模块加载时创建
         self.client = bitable_client
+        
+        # 字段名映射（中文 -> 英文）
+        self.field_mapping = {
+            '任务ID': 'taskid',
+            '任务标题': 'title',
+            '任务描述': 'description',
+            '创建人': 'creator',
+            '创建时间': 'create_time',
+            '任务状态': 'status',
+            '技能标签': 'skilltags',
+            '截止时间': 'deadline',
+            '紧急程度': 'urgency',
+            '分配给': 'assignee',
+            '最终评分': 'final_score',
+            '完成时间': 'completed_at'
+        }
+    
+    def _get_field_value(self, fields: dict, field_name: str, default: Any = None) -> Any:
+        """获取字段值，支持中英文字段名
+        
+        Args:
+            fields: 字段字典
+            field_name: 字段名（中文或英文）
+            default: 默认值
+            
+        Returns:
+            字段值
+        """
+        # 如果是中文字段名，先尝试中文，再尝试对应的英文
+        if field_name in self.field_mapping:
+            return fields.get(field_name) or fields.get(self.field_mapping[field_name], default)
+        
+        # 如果是英文字段名，先尝试英文，再尝试对应的中文
+        reverse_mapping = {v: k for k, v in self.field_mapping.items()}
+        if field_name in reverse_mapping:
+            return fields.get(field_name) or fields.get(reverse_mapping[field_name], default)
+        
+        # 都不是，直接获取
+        return fields.get(field_name, default)
     
     async def create_table(self, app_token, table_name):
         """创建新的数据表
@@ -842,9 +920,9 @@ class BitableClient:
                 # 根据新的字段结构构建候选人信息
                 candidate = {
                     'record_id': record.get('record_id'),
-                    'user_id': fields.get('userid', ''),
+                    'user_id': fields.get('user_id', ''),  # 修复：使用 user_id 而不是 userid
                     'name': fields.get('name', 'Unknown'),
-                    'skill_tags': fields.get('skilltags', '').split(',') if fields.get('skilltags') else [],
+                    'skill_tags': fields.get('skill_tags', []) if isinstance(fields.get('skill_tags'), list) else [],  # 修复：skill_tags 已经是列表
                     'job_level': fields.get('job_level', ''),
                     'experience': experience,
                     'total_tasks': total_tasks,
@@ -869,11 +947,12 @@ class BitableClient:
             logger.error(f"获取所有候选人信息出错: {str(e)}")
             return []
     
-    async def get_available_candidates(self, skill_requirements=None):
+    async def get_available_candidates(self, skill_requirements=None, limit=None):
         """获取可用的候选人
         
         Args:
             skill_requirements: 技能要求列表，可选
+            limit: 返回候选人数量限制，可选（默认无限制）
             
         Returns:
             符合条件的候选人列表
@@ -883,23 +962,31 @@ class BitableClient:
             
             # 如果没有技能要求，返回所有可用候选人
             if not skill_requirements:
-                return [c for c in all_candidates if c.get('status') == 'available']
-            
-            # 根据技能要求筛选候选人
-            qualified_candidates = []
-            for candidate in all_candidates:
-                if candidate.get('status') != 'available':
-                    continue
+                available = [c for c in all_candidates if c.get('status') == 'available']
+            else:
+                # 根据技能要求筛选候选人
+                qualified_candidates = []
+                for candidate in all_candidates:
+                    if candidate.get('status') != 'available':
+                        continue
+                    
+                    candidate_skills = set(candidate.get('skill_tags', []))
+                    required_skills = set(skill_requirements)
+                    
+                    # 如果候选人具备至少一项所需技能，则认为符合条件
+                    if candidate_skills & required_skills:
+                        qualified_candidates.append(candidate)
                 
-                candidate_skills = set(candidate.get('skill_tags', []))
-                required_skills = set(skill_requirements)
-                
-                # 如果候选人具备至少一项所需技能，则认为符合条件
-                if candidate_skills & required_skills:
-                    qualified_candidates.append(candidate)
+                available = qualified_candidates
             
-            logger.info(f"根据技能要求 {skill_requirements} 找到 {len(qualified_candidates)} 名符合条件的候选人")
-            return qualified_candidates
+            # 应用候选人数量限制（截断到最近更新的N人）
+            # 注意：当前按记录顺序截断，理想情况下应按updated_at字段排序
+            if limit and len(available) > limit:
+                logger.info(f"候选人池从 {len(available)} 人截断到 {limit} 人")
+                available = available[:limit]
+            
+            logger.info(f"根据技能要求 {skill_requirements} 找到 {len(available)} 名符合条件的候选人")
+            return available
             
         except Exception as e:
             logger.error(f"获取可用候选人出错: {str(e)}")
@@ -931,27 +1018,39 @@ class BitableClient:
                 if not fields:
                     continue
                 
-                # 匹配记录ID或任务ID
+                # 匹配记录ID或任务ID（支持中英文字段名）
+                task_id_value = self._get_field_value(fields, '任务ID', '')
                 if (record.get('record_id') == task_identifier or 
-                    fields.get('taskid') == task_identifier):
+                    task_id_value == task_identifier):
                     
+                    # 返回统一的字段格式（同时包含中英文字段名）
                     return {
                         'record_id': record.get('record_id'),
-                        'taskid': fields.get('taskid', ''),
-                        'title': fields.get('title', ''),
-                        'description': fields.get('description', ''),
-                        'creator': fields.get('creator', ''),
-                        'create_time': fields.get('create_time', ''),
-                        'status': fields.get('status', 'pending'),
-                        'skilltags': fields.get('skilltags', ''),
-                        'deadline': fields.get('deadline', ''),
-                        'urgency': fields.get('urgency', 'normal')
+                        '任务ID': task_id_value,
+                        '任务标题': self._get_field_value(fields, '任务标题', ''),
+                        '任务描述': self._get_field_value(fields, '任务描述', ''),
+                        '创建人': self._get_field_value(fields, '创建人', ''),
+                        '创建时间': self._get_field_value(fields, '创建时间', ''),
+                        '任务状态': self._get_field_value(fields, '任务状态', 'pending'),
+                        '技能标签': self._get_field_value(fields, '技能标签', ''),
+                        '截止时间': self._get_field_value(fields, '截止时间', ''),
+                        '紧急程度': self._get_field_value(fields, '紧急程度', 'normal'),
+                        # 保留英文字段名以兼容旧代码
+                        'taskid': task_id_value,
+                        'title': self._get_field_value(fields, '任务标题', ''),
+                        'description': self._get_field_value(fields, '任务描述', ''),
+                        'creator': self._get_field_value(fields, '创建人', ''),
+                        'create_time': self._get_field_value(fields, '创建时间', ''),
+                        'status': self._get_field_value(fields, '任务状态', 'pending'),
+                        'skilltags': self._get_field_value(fields, '技能标签', ''),
+                        'deadline': self._get_field_value(fields, '截止时间', ''),
+                        'urgency': self._get_field_value(fields, '紧急程度', 'normal')
                     }
             
             return None
             
         except Exception as e:
-            logger.error(f"获取任务详情出错: {str(e)}")
+            logger.error(f"获取任务详情出错: {str(e)}", exc_info=True)
             return None
     
     async def update_task(self, task_id, update_data):
@@ -959,7 +1058,7 @@ class BitableClient:
         
         Args:
             task_id: 任务ID或记录ID
-            update_data: 更新数据
+            update_data: 更新数据（支持中文或英文字段名）
             
         Returns:
             更新是否成功
@@ -973,28 +1072,79 @@ class BitableClient:
             
             record_id = task.get('record_id')
             
+            # 字段名映射（英文 -> 中文）
+            field_mapping = {
+                'status': '任务状态',
+                'title': '任务标题',
+                'description': '任务描述',
+                'deadline': '截止时间',
+                'urgency': '紧急程度',
+                'skilltags': '技能标签',
+                'skill_tags': '技能标签',
+                'creator': '创建人',
+                'assigned_to': '分配给'
+            }
+            
             # 映射更新数据到正确的字段名
             mapped_update = {}
-            if 'status' in update_data:
-                mapped_update['status'] = update_data['status']
-            if 'title' in update_data:
-                mapped_update['title'] = update_data['title']
-            if 'description' in update_data:
-                mapped_update['description'] = update_data['description']
-            if 'deadline' in update_data:
-                mapped_update['deadline'] = update_data['deadline']
-            if 'urgency' in update_data:
-                mapped_update['urgency'] = update_data['urgency']
-            if 'skill_tags' in update_data:
-                mapped_update['skilltags'] = ','.join(update_data['skill_tags']) if isinstance(update_data['skill_tags'], list) else update_data['skill_tags']
+            for key, value in update_data.items():
+                # 如果是中文字段名，直接使用
+                if key in ['任务状态', '任务标题', '任务描述', '截止时间', '紧急程度', '技能标签', '创建人', '分配给']:
+                    # 处理特殊字段格式
+                    if key in ['创建人', '分配给'] and isinstance(value, str):
+                        # 人员字段需要转换为对象列表
+                        mapped_update[key] = [{"id": value}]
+                    elif key == '截止时间' and isinstance(value, str):
+                        # 时间字段需要转换为时间戳
+                        try:
+                            from datetime import datetime
+                            dt = datetime.strptime(value, '%Y-%m-%d')
+                            mapped_update[key] = int(dt.timestamp() * 1000)
+                        except:
+                            mapped_update[key] = value
+                    else:
+                        mapped_update[key] = value
+                # 如果是英文字段名，转换为中文
+                elif key in field_mapping:
+                    chinese_key = field_mapping[key]
+                    # 处理特殊字段格式
+                    if key in ['creator', 'assigned_to'] and isinstance(value, str):
+                        mapped_update[chinese_key] = [{"id": value}]
+                    elif key == 'deadline' and isinstance(value, str):
+                        try:
+                            from datetime import datetime
+                            dt = datetime.strptime(value, '%Y-%m-%d')
+                            mapped_update[chinese_key] = int(dt.timestamp() * 1000)
+                        except:
+                            mapped_update[chinese_key] = value
+                    elif key in ['skill_tags', 'skilltags']:
+                        # 技能标签处理
+                        if isinstance(value, list):
+                            mapped_update[chinese_key] = value
+                        else:
+                            mapped_update[chinese_key] = value
+                    else:
+                        mapped_update[chinese_key] = value
+            
+            if not mapped_update:
+                logger.warning(f"没有有效的更新数据: {update_data}")
+                return False
             
             # 执行更新
             task_table_id = settings.feishu_task_table_id
             record_data = {"fields": mapped_update}
-            self.client.update_record(task_table_id, record_id, record_data)
             
-            logger.info(f"任务更新成功: {task_id}")
-            return True
+            logger.info(f"准备更新任务 {task_id}，字段: {mapped_update}")
+            
+            result = self.client.update_record(task_table_id, record_id, record_data)
+            
+            # 检查更新结果
+            if result.get('code') == 0:
+                logger.info(f"任务更新成功: {task_id}")
+                return True
+            else:
+                logger.error(f"任务更新失败: {result}")
+                return False
             
         except Exception as e:
             logger.error(f"更新任务出错: {str(e)}")
@@ -1051,7 +1201,7 @@ class BitableClient:
         """创建候选人记录到coder表
         
         Args:
-            candidate_data: 候选人数据字典，包含userid, name, skilltags, job_level, experience, total_tasks, average_score
+            candidate_data: 候选人数据字典，包含userid, name, skilltags, job_level, experience
             
         Returns:
             创建是否成功
@@ -1060,18 +1210,43 @@ class BitableClient:
             # 转换为多维表格需要的格式，确保数据类型正确
             # 处理技能标签：如果为空，在数据库中保存为"待补充"以便后续手动编辑
             skilltags = candidate_data.get('skilltags', '')
-            if not skilltags or skilltags.strip() == '':
-                skilltags = '待补充'  # 数据库占位符，表明需要后续补充
             
+            # 将技能标签转换为数组格式（Bitable中skill_tags是多选字段）
+            if skilltags and skilltags.strip():
+                skill_tags_array = [s.strip() for s in skilltags.split(',') if s.strip()]
+            else:
+                skill_tags_array = ['待补充']  # 数据库占位符，表明需要后续补充
+            
+            # 将数字职级转换为中文文本
+            job_level_value = candidate_data.get('job_level', 1)
+            level_mapping = {
+                1: "初级",
+                2: "中级",
+                3: "高级",
+                4: "专家",
+                5: "架构师"
+            }
+            # 如果已经是文本，直接使用；如果是数字，转换为文本
+            if isinstance(job_level_value, (int, float)):
+                job_level_text = level_mapping.get(int(job_level_value), "初级")
+            else:
+                job_level_text = str(job_level_value)
+            
+            # 注意：只包含候选人表中实际存在的字段
+            # 实际字段：user_id, name, skill_tags, job_level, experience
+            # 字段类型：
+            # - user_id: 文本
+            # - name: 文本
+            # - skill_tags: 多选（数组）
+            # - job_level: 文本（初级、中级、高级、专家、架构师）
+            # - experience: 数字（不要转换为字符串！）
             record_data = {
                 "fields": {
-                    "userid": str(candidate_data.get('userid', '')),
+                    "user_id": str(candidate_data.get('userid', '')),
                     "name": str(candidate_data.get('name', 'Unknown')),
-                    "skilltags": str(skilltags),
-                    "job_level": str(candidate_data.get('job_level', 1)),
-                    "experience": str(candidate_data.get('experience', 0)),  # 转换为字符串
-                    "total_tasks": str(candidate_data.get('total_tasks', 0)),  # 转换为字符串
-                    "average_score": str(candidate_data.get('average_score', 0.0))  # 转换为字符串
+                    "skill_tags": skill_tags_array,
+                    "job_level": job_level_text,
+                    "experience": int(candidate_data.get('experience', 0))  # 必须是数字类型
                 }
             }
             
@@ -1292,7 +1467,7 @@ class BitableClient:
         """创建任务记录到task表
         
         Args:
-            task_record_data: 符合task表格式的任务数据
+            task_record_data: 符合task表格式的任务数据（英文字段名）
             
         Returns:
             记录ID，如果创建失败则返回None
@@ -1317,10 +1492,56 @@ class BitableClient:
                 )
                 return None
             
+            # 将英文字段名转换为中文字段名（匹配飞书多维表格的实际字段）
+            field_mapping = {
+                'taskid': '任务ID',
+                'title': '任务标题',
+                'description': '任务描述',
+                'creator': '创建人',
+                'status': '任务状态',
+                'skilltags': '技能标签',
+                'deadline': '截止时间',
+                'urgency': '紧急程度'
+                # 注意：不包含 create_time，因为表中没有这个字段
+            }
+            
+            # 转换字段名
+            chinese_fields = {}
+            for eng_key, value in task_record_data.items():
+                if eng_key in field_mapping:
+                    chinese_key = field_mapping[eng_key]
+                    # 处理截止时间：需要转换为时间戳（毫秒）
+                    if eng_key == 'deadline' and isinstance(value, str):
+                        try:
+                            from datetime import datetime
+                            dt = datetime.strptime(value, '%Y-%m-%d')
+                            chinese_fields[chinese_key] = int(dt.timestamp() * 1000)
+                        except:
+                            logger.warning(f"无法解析截止时间: {value}")
+                            chinese_fields[chinese_key] = value
+                    # 处理创建人：需要转换为人员对象列表
+                    elif eng_key == 'creator' and value:
+                        # 飞书人员字段格式: [{"id": "user_id"}]
+                        chinese_fields[chinese_key] = [{"id": value}]
+                    # 处理技能标签：需要转换为字符串列表
+                    elif eng_key == 'skilltags' and value:
+                        if isinstance(value, str):
+                            # 如果是逗号分隔的字符串，转换为列表
+                            chinese_fields[chinese_key] = [s.strip() for s in value.split(',') if s.strip()]
+                        elif isinstance(value, list):
+                            # 如果已经是列表，直接使用
+                            chinese_fields[chinese_key] = value
+                        else:
+                            chinese_fields[chinese_key] = [str(value)]
+                    else:
+                        chinese_fields[chinese_key] = value
+            
             # 转换为飞书API需要的格式
             record_data = {
-                "fields": task_record_data
+                "fields": chinese_fields
             }
+            
+            logger.info(f"准备创建任务记录，字段: {chinese_fields}")
             
             # 调用飞书API创建记录
             result = self.client.create_record(task_table_id, record_data)
@@ -1437,18 +1658,59 @@ class BitableClient:
                 fields = record.get('fields', {})
                 if not fields:  # 跳过空记录
                     continue
+                
+                # 处理创建人字段（可能是对象数组）
+                creator_raw = self._get_field_value(fields, '创建人', '')
+                if isinstance(creator_raw, list) and len(creator_raw) > 0:
+                    # 如果是对象数组，提取第一个人的名字
+                    creator = creator_raw[0].get('name', '') if isinstance(creator_raw[0], dict) else str(creator_raw[0])
+                elif isinstance(creator_raw, str):
+                    creator = creator_raw
+                else:
+                    creator = ''
+                
+                # 处理截止时间字段（时间戳转日期）
+                deadline_raw = self._get_field_value(fields, '截止时间', '')
+                if isinstance(deadline_raw, (int, float)) and deadline_raw > 0:
+                    # 将毫秒时间戳转换为日期字符串
+                    from datetime import datetime
+                    deadline = datetime.fromtimestamp(deadline_raw / 1000).strftime('%Y-%m-%d')
+                elif isinstance(deadline_raw, str):
+                    deadline = deadline_raw
+                else:
+                    deadline = ''
+                
+                # 处理创建时间字段（时间戳转日期时间）
+                create_time_raw = self._get_field_value(fields, '创建时间', '')
+                if isinstance(create_time_raw, (int, float)) and create_time_raw > 0:
+                    # 将毫秒时间戳转换为日期时间字符串
+                    from datetime import datetime
+                    create_time = datetime.fromtimestamp(create_time_raw / 1000).strftime('%Y-%m-%d %H:%M:%S')
+                elif isinstance(create_time_raw, str):
+                    create_time = create_time_raw
+                else:
+                    create_time = ''
+                
+                # 处理技能标签（可能是数组）
+                skilltags_raw = self._get_field_value(fields, '技能标签', '')
+                if isinstance(skilltags_raw, list):
+                    skilltags = ', '.join(skilltags_raw)
+                elif isinstance(skilltags_raw, str):
+                    skilltags = skilltags_raw
+                else:
+                    skilltags = ''
                     
                 task = {
                     'record_id': record.get('record_id'),
-                    'taskid': fields.get('taskid', ''),
-                    'title': fields.get('title', '未知任务'),
-                    'description': fields.get('description', ''),
-                    'creator': fields.get('creator', ''),
-                    'create_time': fields.get('create_time', ''),
-                    'status': fields.get('status', 'pending'),
-                    'skilltags': fields.get('skilltags', ''),
-                    'deadline': fields.get('deadline', ''),
-                    'urgency': fields.get('urgency', 'normal')
+                    'taskid': self._get_field_value(fields, '任务ID', ''),
+                    'title': self._get_field_value(fields, '任务标题', '未知任务'),
+                    'description': self._get_field_value(fields, '任务描述', ''),
+                    'creator': creator,
+                    'create_time': create_time,
+                    'status': self._get_field_value(fields, '任务状态', 'pending'),
+                    'skilltags': skilltags,
+                    'deadline': deadline,
+                    'urgency': self._get_field_value(fields, '紧急程度', 'normal')
                 }
                 tasks.append(task)
             
@@ -1562,8 +1824,8 @@ class BitableClient:
                 
                 stats['total'] += 1
                 
-                status = fields.get('status', 'pending').lower()
-                urgency = fields.get('urgency', 'normal').lower()
+                status = self._get_field_value(fields, '任务状态', 'pending').lower()
+                urgency = self._get_field_value(fields, '紧急程度', 'normal').lower()
                 
                 # 统计状态
                 if status in stats:

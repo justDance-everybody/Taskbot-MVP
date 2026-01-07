@@ -1,10 +1,9 @@
 import logging
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple, List
 import json
 from datetime import datetime
 from app.services.llm import llm_service
-from app.bitable import bitable_client
-from app.field_mapping import get_field_value
+from app.bitable import BitableClient
 
 logger = logging.getLogger(__name__)
 
@@ -13,7 +12,7 @@ class CIService:
     
     def __init__(self):
         self.llm = llm_service
-        self.bitable = bitable_client
+        self.bitable = BitableClient()
     
     async def process_github_webhook(self, payload: Dict[str, Any]) -> bool:
         """处理GitHub webhook事件"""
@@ -170,13 +169,15 @@ class CIService:
                 logger.error(f"无法获取任务详情: {task_record['record_id']}")
                 return
             
-            fields = task_data.get("fields", {})
-            submission_url = get_field_value(fields, "submission_url", "task", "")
+            # 直接从任务数据中获取字段（支持中英文字段名）
+            description = task_data.get("description") or task_data.get("任务描述", "")
+            acceptance_criteria = task_data.get("acceptance_criteria", "")
+            submission_url = task_data.get("submission_url", "")
             
             # 调用LLM进行评分
             score, reasons = await self.evaluate_submission(
-                description=get_field_value(fields, "description", "task", ""),
-                acceptance_criteria=get_field_value(fields, "acceptance_criteria", "task", ""),
+                description=description,
+                acceptance_criteria=acceptance_criteria,
                 submission_url=submission_url
             )
             
@@ -206,8 +207,8 @@ class CIService:
             system_prompt = self._build_evaluation_system_prompt()
             user_prompt = self._build_evaluation_user_prompt(description, acceptance_criteria, submission_url)
             
-            # 调用LLM
-            response = await self.llm.call(user_prompt, system_prompt)
+            # 调用LLM - 使用 call_with_retry 方法
+            response = await self.llm.call_with_retry(user_prompt, system_prompt)
             
             # 解析评分结果
             score, reasons = self._parse_evaluation_response(response)

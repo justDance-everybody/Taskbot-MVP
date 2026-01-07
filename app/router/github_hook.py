@@ -7,7 +7,7 @@ import json
 import hashlib
 import hmac
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Set
 from fastapi import APIRouter, Request, HTTPException, Header, BackgroundTasks
 from pydantic import BaseModel
 
@@ -18,6 +18,16 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/webhook/github", tags=["GitHub Webhook"])
+
+# GitHub Webhook去重缓存 - 存储已处理的delivery_id
+_processed_deliveries: Set[str] = set()
+_max_cache_size = 1000  # 最大缓存大小
+
+
+def clear_delivery_cache():
+    """清空delivery缓存（用于测试）"""
+    global _processed_deliveries
+    _processed_deliveries.clear()
 
 
 class GitHubWebhookPayload(BaseModel):
@@ -54,6 +64,22 @@ async def github_webhook(
     """处理GitHub webhook事件"""
     
     try:
+        # GitHub Webhook去重检查
+        global _processed_deliveries, _max_cache_size
+        if x_github_delivery in _processed_deliveries:
+            logger.info(f"重复的GitHub webhook已跳过 - delivery: {x_github_delivery}")
+            return {"status": "ok", "message": "duplicate delivery skipped", "delivery": x_github_delivery}
+        
+        # 添加到已处理缓存
+        _processed_deliveries.add(x_github_delivery)
+        
+        # 缓存大小控制：超过最大限制时，清理一半的旧记录
+        if len(_processed_deliveries) > _max_cache_size:
+            deliveries_to_remove = list(_processed_deliveries)[:_max_cache_size // 2]
+            for delivery_id in deliveries_to_remove:
+                _processed_deliveries.discard(delivery_id)
+            logger.info(f"清理GitHub webhook缓存，移除 {len(deliveries_to_remove)} 条旧记录")
+        
         # 获取原始载荷
         payload_bytes = await request.body()
         

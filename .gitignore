@@ -1,4 +1,37 @@
-/${Bot}
-/.venv
-/LICENSE
-/__pycache__
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Testing
+.pytest_cache/
+.hypothesis/
+.coverage
+htmlcov/
+coverage.json
+*.log
+
+# Project specific
+.env
+app.log
+*.csv
+*.json
+!config.yaml.example
+!.env.example
+
+# OS
+.DS_Store
+Thumbs.db

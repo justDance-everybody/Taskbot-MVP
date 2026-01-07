@@ -1,0 +1,82 @@
+Taskbot-MVP/
+│
+├── 📄 快速开始
+│   ├── START_HERE.md              ⭐ 从这里开始
+│   ├── README.md                  📖 完整部署指南
+│   ├── PROJECT_OVERVIEW.md        📊 项目概览
+│   └── STRUCTURE.md               🗂️  项目结构说明
+│
+├── 📄 配置文件
+│   ├── .env                       🔐 环境变量（需配置）
+│   ├── .env.example              📝 环境变量模板
+│   ├── config.yaml.example       ⚙️  配置模板
+│   ├── requirements.txt          📦 Python依赖
+│   ├── Dockerfile                🐳 Docker配置
+│   ├── docker-compose.yml        🐳 Docker Compose
+│   ├── Makefile                  🔨 构建脚本
+│   └── start_server.sh           🚀 启动脚本
+│
+├── 📁 app/                        💻 应用代码
+│   ├── api.py                    🌐 API路由
+│   ├── bitable.py                📊 多维表格
+│   ├── config.py                 ⚙️  配置管理
+│   ├── webhooks.py               🔔 Webhook处理
+│   │
+│   ├── services/                 🛠️  核心服务
+│   │   ├── feishu.py            📱 飞书API
+│   │   ├── llm.py               🤖 LLM服务
+│   │   ├── cv_parser.py         📄 简历解析
+│   │   ├── match.py             🎯 候选人匹配
+│   │   ├── task_manager.py      📋 任务管理
+│   │   ├── task_monitor.py      👁️  任务监控
+│   │   ├── scheduler.py         ⏰ 定时任务
+│   │   ├── db_audit.py          🔍 数据审计
+│   │   └── ci.py                ✅ CI集成
+│   │
+│   └── router/                   🔀 路由模块
+│       └── github_hook.py       🐙 GitHub集成
+│
+├── 📁 tests/                      🧪 测试代码
+│   ├── unit/                     🔬 单元测试
+│   └── integration/              🔗 集成测试
+│
+└── 📁 docs/                       📚 文档目录
+    ├── README.md                 📑 文档索引
+    ├── DOCUMENTATION_INDEX.md    �� 详细索引
+    │
+    ├── 👤 用户文档
+    │   ├── QUICK_START.md        ⚡ 快速开始
+    │   ├── USER_GUIDE.md         📖 用户手册
+    │   ├── QUICK_REFERENCE.md    📋 命令速查
+    │   └── TROUBLESHOOTING.md    🔧 故障排查
+    │
+    ├── 📁 guides/                 📘 功能指南
+    │   ├── FEISHU_BOT_SETUP.md          🔧 飞书配置（必读）
+    │   ├── WEBHOOK_VERIFICATION_GUIDE.md 🔗 Webhook验证
+    │   ├── PERMISSION_SETUP.md          🔐 权限配置
+    │   ├── LLM_API_SETUP.md            🤖 LLM配置
+    │   ├── CV_PARSER_GUIDE.md          📄 简历解析
+    │   ├── SUBGROUP_CREATION_GUIDE.md  👥 子群创建
+    │   └── MANUAL_ASSIGN_GUIDE.md      📌 任务分配
+    │
+    ├── 📁 archive/                📦 归档文档
+    │   └── CHANGELOG.md          📝 更新日志
+    │
+    └── 📁 产品文档                 📊 需求与设计
+        ├── task_bot_mvp_产品PRD需求文档.md
+        ├── task_bot_mvp_产品开发文档.md
+        ├── task_bot_mvp_测试用例及验收文档.md
+        ├── task_bot_mvp_运行与环境配置.md
+        └── task_bot_mvp_prompt设定说明.md
+
+═══════════════════════════════════════════════════════════
+
+📖 快速导航:
+
+  🆕 新用户     → START_HERE.md
+  📚 完整文档   → docs/README.md
+  🔧 配置指南   → docs/guides/FEISHU_BOT_SETUP.md
+  📖 使用手册   → docs/USER_GUIDE.md
+  🔍 故障排查   → docs/TROUBLESHOOTING.md
+
+═══════════════════════════════════════════════════════════

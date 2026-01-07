@@ -49,6 +49,137 @@ def _get_job_level_text(job_level) -> str:
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 feishu_service = FeishuService()
 
+@router.post("/feishu")
+async def feishu_webhook(request: Request):
+    """
+    飞书Webhook端点
+    处理飞书事件订阅的验证和事件推送
+    """
+    try:
+        # 获取请求体
+        body = await request.json()
+        
+        # 处理URL验证（challenge）
+        if body.get("type") == "url_verification":
+            challenge = body.get("challenge", "")
+            logger.info(f"收到飞书URL验证请求，challenge: {challenge}")
+            return {"challenge": challenge}
+        
+        # 处理事件回调
+        event_type = body.get("header", {}).get("event_type")
+        logger.info(f"收到飞书事件: {event_type}")
+        
+        # 处理卡片回调事件
+        if event_type == "card.action.trigger":
+            logger.info("收到卡片回调事件")
+            event_data = body.get("event", {})
+            
+            # 提取操作信息
+            action = event_data.get("action", {})
+            operator = event_data.get("operator", {})
+            context = event_data.get("context", {})
+            
+            user_id = operator.get("open_id") or operator.get("user_id")
+            action_value = action.get("value", {})
+            chat_id = context.get("open_chat_id")  # 获取群聊ID
+            
+            logger.info(f"卡片回调: user_id={user_id}, chat_id={chat_id}, action={action_value}")
+            
+            # 异步处理卡片动作（不阻塞响应）
+            import asyncio
+            asyncio.create_task(_handle_card_action_sync(user_id, action_value, chat_id))
+            
+            # 立即返回成功响应（符合飞书要求，必须在3秒内返回）
+            return {
+                "toast": {
+                    "type": "success",
+                    "content": "正在处理您的请求..."
+                }
+            }
+        
+        # 处理消息接收事件
+        if event_type == "im.message.receive_v1":
+            event_data = body.get("event", {})
+            message = event_data.get("message", {})
+            sender = event_data.get("sender", {})
+            
+            message_type = message.get("message_type")
+            message_content = message.get("content")
+            
+            # 提取sender_id - 优先使用open_id，其次user_id
+            sender_id_obj = sender.get("sender_id", {})
+            sender_id = sender_id_obj.get("open_id") or sender_id_obj.get("user_id")
+            
+            # 调试日志：记录sender结构
+            logger.info(f"Sender结构: {sender}")
+            logger.info(f"提取的sender_id: {sender_id}")
+            
+            chat_id = message.get("chat_id")
+            chat_type = message.get("chat_type")
+            message_id = message.get("message_id")
+            
+            logger.info(f"收到Webhook消息: {message_content} (chat_type: {chat_type}, message_id: {message_id}, sender_id: {sender_id})")
+            
+            # 处理文本消息
+            if message_type == "text":
+                import json
+                content_dict = json.loads(message_content)
+                text = content_dict.get("text", "")
+                
+                # 处理群聊消息：检查是否@了机器人或者是特定命令
+                if chat_type == "group":
+                    mentions = message.get("mentions", [])
+                    bot_mentioned = False
+                    
+                    # 检查是否@了机器人
+                    for mention in mentions:
+                        if mention.get("name") == "Bot" or mention.get("id", {}).get("open_id"):
+                            bot_mentioned = True
+                            # 移除@mention部分
+                            mention_key = mention.get("key", "")
+                            if mention_key in text:
+                                text = text.replace(mention_key, "").strip()
+                            break
+                    
+                    # 群聊中：被@时处理所有消息，未被@时只处理特定命令
+                    if not bot_mentioned:
+                        if not (text.startswith("新任务") or text.startswith("/")):
+                            logger.info(f"Group message without mention ignored: {text}")
+                            return {"code": 0, "msg": "success"}
+                
+                # 异步处理文本命令
+                import asyncio
+                asyncio.create_task(_process_text_command(sender_id, text, chat_id))
+            
+            # 处理文件消息（PDF简历）
+            elif message_type == "file":
+                import json
+                content_dict = json.loads(message_content)
+                file_key = content_dict.get("file_key", "")
+                file_name = content_dict.get("file_name", "")
+                
+                # 检查是否为PDF文件
+                if file_name.lower().endswith('.pdf'):
+                    logger.info(f"收到PDF简历文件: {file_name} (file_key: {file_key})")
+                    
+                    # 异步处理PDF简历分析
+                    import asyncio
+                    asyncio.create_task(handle_resume_upload(sender_id, file_key, file_name, chat_id, message_id))
+                else:
+                    # 非PDF文件，提示用户
+                    import asyncio
+                    asyncio.create_task(feishu_service.send_message(
+                        user_id=sender_id,
+                        message="❌ 请上传PDF格式的简历文件。目前只支持PDF格式的简历分析。"
+                    ))
+        
+        # 返回成功响应
+        return {"code": 0, "msg": "success"}
+        
+    except Exception as e:
+        logger.error(f"处理飞书Webhook失败: {str(e)}")
+        return {"code": -1, "msg": str(e)}
+
 # 注意：setup_event_handler函数已被移除，因为它与handle_message_event重复
 # 现在统一使用setup_websocket_client中的handle_message_event和handle_card_action_event
 
@@ -154,6 +285,7 @@ async def handle_help_command(user_id: str, chat_id: str = None):
 📊 **任务查询**
 • `/tasks` - 查看所有任务（支持翻页删除）
 • `/task table` - 查看任务表格详情
+• `/assign` - 手动分配任务（查看待分配任务并选择候选人）
 • `/report` 或 `#report` - 生成每日统计报告
 
 🔍 **任务监测**
@@ -296,7 +428,7 @@ async def handle_done_command(user_id: str, command: str, chat_id: str = None):
             return
         
         # 更新任务状态为已提交
-        await task_manager.submit_task(task_id, user_id, submission_url)
+        await task_manager.submit_task(task_id, user_id, submission_url, chat_id=chat_id)
         
         # 发送提交确认消息
         await feishu_service.send_message(
@@ -843,7 +975,17 @@ def handle_message_event(data: lark.im.v1.P2ImMessageReceiveV1) -> None:
         logger.error(f"处理长连接消息事件失败: {str(e)}")
 
 def handle_card_action_event(data) -> dict:
-    """处理卡片动作事件"""
+    """处理卡片动作事件
+    
+    根据飞书文档，卡片回调需要返回以下格式：
+    {
+        "toast": {
+            "type": "info" | "success" | "warning" | "error",
+            "content": "提示内容"
+        }
+    }
+    或者返回空对象 {}
+    """
     try:
         # 获取动作信息
         event = data.event
@@ -851,33 +993,34 @@ def handle_card_action_event(data) -> dict:
         user_id = event.operator.user_id
         action_value = action.value  # 获取实际的动作值
         
-        logger.info(f"收到长连接卡片动作: {action_value}")
+        logger.info(f"收到长连接卡片动作: user_id={user_id}, action={action_value}")
         
-        # 异步处理卡片动作
+        # 异步处理卡片动作（不阻塞响应）
         import asyncio
         import concurrent.futures
         
         # 使用线程池执行器来避免事件循环冲突
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            future = executor.submit(asyncio.run, _handle_card_action_sync(user_id, action_value))
-            future.result()
+        # 注意：这里不等待结果，快速返回响应
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        executor.submit(asyncio.run, _handle_card_action_sync(user_id, action_value))
         
-        # 返回响应
+        # 快速返回成功响应（符合飞书文档要求）
         return {
             "toast": {
-                "type": "info",
-                "content": "操作已处理"
+                "type": "success",
+                "content": "正在处理您的请求..."
             }
         }
         
     except Exception as e:
-         logger.error(f"处理长连接卡片动作事件失败: {str(e)}")
-         return {
-             "toast": {
-                 "type": "error",
-                 "content": "处理失败"
-             }
-         }
+        logger.error(f"处理长连接卡片动作事件失败: {str(e)}", exc_info=True)
+        # 返回错误提示
+        return {
+            "toast": {
+                "type": "error",
+                "content": "操作失败，请稍后重试"
+            }
+        }
  
 # 全局变量防止重复启动
 _websocket_client_started = False
@@ -957,8 +1100,14 @@ async def _process_resume_upload_sync(user_id: str, file_key: str, file_name: st
             message="❌ 处理简历时出错，请稍后重试。"
         )
 
-async def _handle_card_action_sync(user_id: str, action_value: Dict[str, Any]):
-    """同步版本的卡片交互处理（用于长连接事件）"""
+async def _handle_card_action_sync(user_id: str, action_value: Dict[str, Any], chat_id: str = None):
+    """同步版本的卡片交互处理（用于长连接事件）
+    
+    Args:
+        user_id: 用户ID
+        action_value: 动作值字典
+        chat_id: 群聊ID（可选）
+    """
     try:
         # 直接处理卡片动作，避免调用已停用的函数
         action_type = action_value.get("action")
@@ -1020,6 +1169,17 @@ async def _handle_card_action_sync(user_id: str, action_value: Dict[str, Any]):
                 user_id=user_id,
                 message="✅ 已取消删除操作"
             )
+        
+        elif action_type == "assign_select_task":
+            # 选择要分配的任务
+            task_id = action_value.get("task_id")
+            await handle_assign_select_candidates(user_id, task_id, chat_id)
+        
+        elif action_type == "assign_to_candidate":
+            # 确认分配任务给候选人
+            task_id = action_value.get("task_id")
+            candidate_id = action_value.get("candidate_id")
+            await handle_assign_confirm(user_id, task_id, candidate_id, chat_id)
         
         elif action_type == "candidates_page":
             # 处理候选人列表翻页
@@ -1400,7 +1560,8 @@ async def _process_text_command(user_id: str, text: str, chat_id: str = None):
                     task_id=task_id,
                     user_id=user_id,
                     submission_url=submission_url,
-                    submission_note=submission_note
+                    submission_note=submission_note,
+                    chat_id=chat_id  # 传递chat_id用于通知
                 )
                 
                 if success:
@@ -1500,6 +1661,10 @@ async def _process_text_command(user_id: str, text: str, chat_id: str = None):
             # 任务列表命令
             await handle_tasks_list_command(user_id, text, chat_id)
         
+        elif text.startswith("/assign"):
+            # 手动分配任务命令
+            await handle_assign_task_command(user_id, text, chat_id)
+        
         elif text.startswith("/done"):
             # 处理任务完成提交命令
             await handle_done_command(user_id, text, chat_id)
@@ -1523,6 +1688,14 @@ async def _process_text_command(user_id: str, text: str, chat_id: str = None):
         elif text.startswith("/candidates") or text.startswith("/coders"):
             # 处理候选人信息展示命令
             await handle_candidates_command(user_id, text, chat_id)
+        
+        elif text.lower() == "ping":
+            # 处理ping命令
+            await send_smart_message(
+                user_id=user_id,
+                message="pong! 🏓 Bot is alive!",
+                chat_id=chat_id
+            )
         
         elif ('@bot' in text and '新任务' in text) or text.startswith('新任务'):
             # 处理新任务命令
@@ -1632,10 +1805,12 @@ async def handle_new_task_command(user_id: str, text_content: str, chat_id: str 
         
         # 构建候选人信息字符串
         candidates_info = "\n".join([
-            f"- {c.get('name', '未知')}: 技能[{', '.join(c.get('skill_tags', []))}], "
-            f"经验{c.get('experience_years', 0)}年, "
-            f"可用时间{c.get('hours_available', 0)}小时/周, "
-            f"评分{c.get('average_score', 0)}"
+            f"- user_id: {c.get('user_id', '未知')}, "
+            f"姓名: {c.get('name', '未知')}, "
+            f"技能: [{', '.join(c.get('skill_tags', []))}], "
+            f"经验: {c.get('experience_years', 0)}年, "
+            f"可用时间: {c.get('hours_available', 0)}小时/周, "
+            f"评分: {c.get('average_score', 0)}"
             for c in candidates
         ])
         
@@ -1664,6 +1839,7 @@ async def handle_new_task_command(user_id: str, text_content: str, chat_id: str 
   },
   "top_candidates": [
     {
+      "user_id": "候选人的user_id（必须从候选人列表中获取）",
       "name": "候选人姓名",
       "match_score": 数字(0-100),
       "match_reason": "匹配理由",
@@ -1674,7 +1850,9 @@ async def handle_new_task_command(user_id: str, text_content: str, chat_id: str 
   ]
 }
 
-注意：请确保生成的信息完整、准确，便于直接录入多维表格。"""
+注意：
+1. top_candidates中的user_id字段必须从提供的候选人列表中获取，不能为空
+2. 请确保生成的信息完整、准确，便于直接录入多维表格"""
         
         user_prompt = f"""任务描述：{task_description}
 
@@ -1935,7 +2113,7 @@ async def _send_candidate_selection_card(user_id: str, task_id: str, task_info: 
             "tag": "div",
             "text": {
                 "tag": "lark_md",
-                "content": f"**新任务匹配结果**\n\n**任务**: {task_info['title']}\n**描述**: {task_info['description']}\n**技能要求**: {skill_display}\n**截止时间**: {task_info['deadline']}"
+                "content": f"**🎯 AI推荐候选人 - 点击分配任务**\n\n**任务**: {task_info['title']}\n**描述**: {task_info['description']}\n**技能要求**: {skill_display}\n**截止时间**: {task_info['deadline']}\n\n💡 点击下方按钮即可将任务分配给候选人，系统会自动创建协作群"
             }
         })
         
@@ -1944,11 +2122,9 @@ async def _send_candidate_selection_card(user_id: str, task_id: str, task_info: 
         
         # 候选人列表
         for i, candidate in enumerate(candidates, 1):
-            match_score = candidate.get('match_score', 0)
             match_reason = candidate.get('match_reason', '无')
             
             candidate_info = f"**候选人 {i}**: {candidate.get('name', '未知')}\n" \
-                           f"**匹配度**: {match_score}%\n" \
                            f"**技能**: {', '.join(candidate.get('skill_tags', []))}\n" \
                            f"**可用时间**: {candidate.get('hours_available', 0)}小时\n" \
                            f"**匹配理由**: {match_reason}"
@@ -1961,14 +2137,14 @@ async def _send_candidate_selection_card(user_id: str, task_id: str, task_info: 
                 }
             })
             
-            # 选择按钮
+            # 选择按钮 - 更新文本以反映分配功能
             card_elements.append({
                 "tag": "action",
                 "actions": [{
                     "tag": "button",
                     "text": {
                         "tag": "plain_text",
-                        "content": f"✅ 选择候选人{i}"
+                        "content": f"✅ 分配给候选人{i}"
                     },
                     "type": "primary",
                     "value": {
@@ -2002,7 +2178,7 @@ async def _send_candidate_selection_card(user_id: str, task_id: str, task_info: 
         logger.error(f"发送候选人选择卡片时出错: {str(e)}")
 
 async def handle_candidate_selection(user_id: str, action_value: Dict[str, Any]):
-    """处理候选人选择"""
+    """处理候选人选择 - 结合任务分配功能"""
     try:
         task_id = action_value.get('task_id')
         candidate_id = action_value.get('candidate_id')
@@ -2015,7 +2191,7 @@ async def handle_candidate_selection(user_id: str, action_value: Dict[str, Any])
             )
             return
         
-        # 获取完整的任务信息，用于在群聊中重复任务描述
+        # 获取完整的任务信息
         task_info = await bitable_client.get_task(task_id)
         if not task_info:
             await feishu_service.send_message(
@@ -2024,9 +2200,26 @@ async def handle_candidate_selection(user_id: str, action_value: Dict[str, Any])
             )
             return
         
-        # 创建任务小群
+        # 获取候选人信息
+        candidates = await bitable_client.get_all_candidates()
+        candidate = next((c for c in candidates if c.get('user_id') == candidate_id), None)
+        
+        candidate_name = candidate.get('name', '未知') if candidate else '未知'
+        
+        # 1. 更新任务状态为已分配
+        # 注意：多维表格中暂时没有"分配给"字段，只更新状态
+        update_data = {
+            '任务状态': 'assigned'
+            # '分配给': [{"id": candidate_id}]  # 待添加字段后启用
+        }
+        
+        update_success = await bitable_client.update_task(task_id, update_data)
+        
+        if not update_success:
+            logger.warning(f"任务状态更新失败，但继续创建协作群: {task_id}")
+        
+        # 2. 创建任务协作群
         chat_name = f"任务协作群-{task_id[:8]}"
-        # 群成员：任务发起人 + 候选人 + 机器人（如果配置了的话）
         members = [user_id, candidate_id]
         
         # 如果配置了机器人用户ID，将机器人也添加到群聊中
@@ -2039,30 +2232,39 @@ async def handle_candidate_selection(user_id: str, action_value: Dict[str, Any])
             chat_id = await feishu_service.create_chat(chat_name, members)
             
             if chat_id:
-                # 构建完整的任务描述消息
-                skilltags = task_info.get('skilltags', '')
+                # 构建任务详情消息
+                task_title = task_info.get('title', task_info.get('任务标题', '未知任务'))
+                task_desc = task_info.get('description', task_info.get('任务描述', '无描述'))
+                skilltags = task_info.get('skilltags', task_info.get('技能标签', ''))
+                
                 if isinstance(skilltags, str):
                     skill_display = skilltags
+                elif isinstance(skilltags, list):
+                    skill_display = ', '.join(skilltags)
                 else:
-                    skill_display = ', '.join(skilltags) if skilltags else '通用'
+                    skill_display = '通用'
+                
+                deadline = task_info.get('deadline', task_info.get('截止时间', '未设置'))
+                urgency = task_info.get('urgency', task_info.get('紧急程度', '普通'))
                 
                 task_description_message = f"""📋 **任务协作群详情**
 
-**任务ID**: {task_info.get('taskid', task_id)}
-**任务标题**: {task_info.get('title', '未知任务')}
-**任务描述**: {task_info.get('description', '无描述')}
+**任务ID**: {task_id}
+**任务标题**: {task_title}
+**任务描述**: {task_desc}
 **技能要求**: {skill_display}
-**截止时间**: {task_info.get('deadline', '未设置')}
-**紧急程度**: {task_info.get('urgency', '普通')}
-**创建者**: {task_info.get('creator', user_id)}
-
-**选中候选人**: 候选人{candidate_rank}
+**截止时间**: {deadline}
+**紧急程度**: {urgency}
+**分配人**: HR
+**执行人**: {candidate_name}
 
 ---
 🎯 **协作说明**：
 • 请在此群中进行任务相关的沟通协作
 • 可以直接@机器人获取帮助和状态更新
 • 完成任务后请使用 `/done <提交链接>` 命令提交
+
+✅ 任务已分配，状态已更新为"已分配"
 """
                 
                 # 发送任务详情到群聊
@@ -2072,51 +2274,86 @@ async def handle_candidate_selection(user_id: str, action_value: Dict[str, Any])
                 )
                 
                 # 通知任务发起人
+                success_message = f"""✅ **任务分配成功！**
+
+📋 **任务**: {task_title}
+🆔 **任务ID**: {task_id}
+👤 **分配给**: {candidate_name} (候选人{candidate_rank})
+💬 **协作群**: 已创建
+📊 **状态**: 已更新为"已分配"
+
+已创建任务协作群：{chat_name}"""
+                
                 await feishu_service.send_message(
                     user_id=user_id,
-                    message=f"✅ 候选人选择成功！\n" \
-                           f"已创建任务协作群：{chat_name}\n" \
-                           f"群聊ID：{chat_id}"
+                    message=success_message
                 )
                 
                 # 通知被选中的候选人
                 await feishu_service.send_message(
                     user_id=candidate_id,
                     message=f"🎯 恭喜！您被选中参与任务协作\n" \
-                           f"任务ID：{task_id}\n" \
-                           f"已为您创建任务协作群：{chat_name}\n" \
+                           f"📋 任务：{task_title}\n" \
+                           f"🆔 任务ID：{task_id}\n" \
+                           f"💬 已为您创建任务协作群：{chat_name}\n" \
                            f"请查看群聊进行后续沟通。"
                 )
                 
+                logger.info(f"任务 {task_id} 已分配给候选人 {candidate_id}，协作群已创建: {chat_id}")
+                
             else:
-                # 群聊创建失败，回退到原有逻辑
+                # 群聊创建失败
                 await feishu_service.send_message(
                     user_id=user_id,
-                    message=f"候选人选择成功，但创建协作群失败。\n" \
-                           f"任务ID：{task_id}\n" \
-                           f"选中候选人：{candidate_id}\n" \
-                           f"请手动联系候选人进行后续沟通。"
+                    message=f"""⚠️ **任务已分配，但协作群创建失败**
+
+📋 **任务**: {task_title}
+🆔 **任务ID**: {task_id}
+👤 **分配给**: {candidate_name}
+📊 **状态**: 已更新为"已分配"
+
+请手动联系候选人进行后续沟通。"""
+                )
+                
+                # 仍然通知候选人
+                await feishu_service.send_message(
+                    user_id=candidate_id,
+                    message=f"🎯 您被分配了新任务：{task_title} (ID: {task_id})，请及时查看任务详情。"
                 )
                 
         except Exception as chat_error:
             logger.error(f"创建任务协作群时出错: {str(chat_error)}")
-            # 群聊创建失败，但候选人选择成功
+            # 群聊创建失败，但任务已分配
             await feishu_service.send_message(
                 user_id=user_id,
-                message=f"候选人选择成功，但创建协作群时出现问题。\n" \
-                       f"任务ID：{task_id}\n" \
-                       f"选中候选人：{candidate_id}\n" \
-                       f"请手动联系候选人进行后续沟通。"
+                message=f"""⚠️ **任务已分配，但协作群创建失败**
+
+📋 **任务**: {task_title if 'task_title' in locals() else '未知'}
+🆔 **任务ID**: {task_id}
+👤 **分配给**: {candidate_name}
+📊 **状态**: 已更新为"已分配"
+❌ **错误**: {str(chat_error)}
+
+请手动联系候选人进行后续沟通。"""
             )
             
+            # 仍然通知候选人
+            try:
+                await feishu_service.send_message(
+                    user_id=candidate_id,
+                    message=f"🎯 您被分配了新任务 (ID: {task_id})，请及时查看任务详情。"
+                )
+            except:
+                pass
+            
         # 记录选择日志
-        logger.info(f"用户 {user_id} 为任务 {task_id} 选择了候选人 {candidate_id} (排名第{candidate_rank})")
+        logger.info(f"用户 {user_id} 为任务 {task_id} 选择并分配了候选人 {candidate_id} (排名第{candidate_rank})")
         
-        # 更新统计数据（候选人选择操作） - 这里只是刷新，不增加计数
+        # 更新统计数据
         try:
             from app.services.task_manager import task_manager
             await task_manager._update_daily_stats()
-            logger.info(f"候选人选择后统计数据已刷新: {task_id}")
+            logger.info(f"任务分配后统计数据已刷新: {task_id}")
         except Exception as stats_error:
             logger.error(f"刷新统计数据失败: {str(stats_error)}")
             
@@ -2791,6 +3028,7 @@ def _format_daily_report(report: Dict[str, Any]) -> str:
         assigned_tasks = report.get('assigned_tasks', 0)
         average_score = report.get('average_score', 0)
         completion_rate = report.get('completion_rate', 0)
+        average_assignment_time = report.get('average_assignment_time', 'N/A')
         
         # 今日数据
         today_created = report.get('today_created', 0)
@@ -2814,29 +3052,30 @@ def _format_daily_report(report: Dict[str, Any]) -> str:
         # 计算完成率百分比
         completion_percentage = completion_rate if completion_rate else 0
         
-        # 构建完整的报告
-        report_text = f"""📊 **每日任务管理统计报告**
+        # 构建完整的报告（按照设计文档的格式）
+        report_text = f"""📊 **每日任务报告** - {date}
 
-📅 **报告日期**: {date}
-⏰ **数据更新**: {last_updated[:19] if last_updated != 'Unknown' else 'Unknown'}
+**任务概览**
+• 总任务数: {total_tasks}
+• 已完成: {completed_tasks} ✅
+• 进行中: {in_progress_tasks} 🔄
+• 待分配: {pending_tasks} ⏳
 
-📈 **任务总览**:
-• 📊 总任务数: {total_tasks}
-• ✅ 已完成: {completed_tasks}
-• 🔄 进行中: {in_progress_tasks}
-• ⏳ 待处理: {pending_tasks}
+**效率指标**
+• 平均指派耗时: {average_assignment_time}
+• 完成率: {completion_percentage:.1f}%
+
+**今日动态**
+• 新建任务: {today_created}
+• 完成任务: {today_completed}
+
+**详细状态**
 • 📤 已提交: {submitted_tasks}
 • 🔍 审核中: {reviewing_tasks}
 • 📋 已分配: {assigned_tasks}
 • ❌ 已拒绝: {rejected_tasks}
 
-🎯 **绩效指标**:
-• 📊 完成率: {completion_percentage:.1f}%
-• ⭐ 平均评分: {average_score:.1f}分
-• 🆕 今日新增: {today_created}个
-• 🎉 今日完成: {today_completed}个
-
-🚨 **优先级分布**:
+**优先级分布**
 • 🚨 紧急: {urgent_tasks}个
 • 🔴 高优先级: {high_tasks}个
 • 🟡 普通: {normal_tasks}个
@@ -2859,12 +3098,13 @@ def _format_daily_report(report: Dict[str, Any]) -> str:
         
         report_text += f"""
 
-🗄️ **数据库状态**:
+🗄️ **数据库状态**
 • 📝 总记录数: {total_records}
 • 💾 数据源: 飞书多维表格
 • 🔄 同步状态: {'正常' if total_records > 0 else '异常'}
+• ⏰ 更新时间: {last_updated[:19] if last_updated != 'Unknown' else 'Unknown'}
 
-📊 **今日数据库操作审计**:
+📊 **今日数据库操作审计**
 • 🔢 总操作数: {audit_operations}
 • ✅ 成功操作: {audit_by_result.get('success', 0)}
 • ❌ 失败操作: {audit_by_result.get('failed', 0)}"""
@@ -3548,6 +3788,13 @@ async def _send_candidates_card_with_buttons(user_id: str, content: str, sort_by
 async def handle_resume_upload(user_id: str, file_key: str, file_name: str, chat_id: str = None, message_id: str = None):
     """处理PDF简历上传和分析"""
     try:
+        logger.info(f"开始处理简历上传: user_id={user_id}, file_name={file_name}, file_key={file_key}")
+        
+        # 验证user_id不为空
+        if not user_id:
+            logger.error("❌ user_id为空，无法处理简历上传")
+            return
+        
         # 发送处理提示
         await feishu_service.send_message(
             user_id=user_id,
@@ -3583,9 +3830,12 @@ async def handle_resume_upload(user_id: str, file_key: str, file_name: str, chat
             )
             return
         
-        # 使用AI分析PDF简历
+        # 使用CV Parser模块分析PDF简历
+        from app.services.cv_parser import CVParser
         from app.services.llm import llm_service
-        resume_data = await llm_service.analyze_resume_pdf(file_content, file_name)
+        
+        cv_parser = CVParser(llm_service=llm_service)
+        resume_data = await cv_parser.parse_resume(file_content, file_name)
         
         if not resume_data:
             await feishu_service.send_message(
@@ -3902,6 +4152,8 @@ async def _get_feishu_access_token() -> str:
 def _prepare_candidate_data(resume_data: dict, user_id: str) -> dict:
     """准备候选人数据"""
     try:
+        logger.info(f"准备候选人数据，user_id: {user_id}, resume_data: {resume_data}")
+        
         # 从AI分析结果中提取和转换数据
         skills_list = resume_data.get('skills', [])
         # 严格模式：如果AI没有提取到技能，就保持为空，但在数据库中需要一个占位符
@@ -3920,6 +4172,8 @@ def _prepare_candidate_data(resume_data: dict, user_id: str) -> dict:
             'average_score': 0.0  # 新候选人默认为0
         }
         
+        logger.info(f"候选人数据准备完成: userid={candidate_data['userid']}, name={candidate_data['name']}")
+        
         # 数据验证和清理
         if not candidate_data['name'] or candidate_data['name'] == 'Unknown':
             candidate_data['name'] = f"候选人_{user_id[-6:]}"  # 使用用户ID后6位作为默认名称
@@ -3936,7 +4190,7 @@ def _prepare_candidate_data(resume_data: dict, user_id: str) -> dict:
         # 返回最基本的数据
         return {
             'userid': user_id,
-            'name': f"候选人_{user_id[-6:]}",
+            'name': f"候选人_{user_id[-6:] if user_id else 'unknown'}",
             'skilltags': '',
             'job_level': 'Junior',
             'experience': 0,
@@ -3947,22 +4201,375 @@ def _prepare_candidate_data(resume_data: dict, user_id: str) -> dict:
 async def _save_candidate_to_table(candidate_data: dict) -> bool:
     """保存候选人数据到多维表格"""
     try:
+        userid = candidate_data.get('userid')
+        
+        # 验证userid不为空
+        if not userid:
+            logger.error(f"❌ userid为空，无法保存候选人数据: {candidate_data}")
+            return False
+        
         # 检查候选人是否已存在
-        existing_candidate = await bitable_client.get_candidate_details(candidate_data['userid'])
+        existing_candidate = await bitable_client.get_candidate_details(userid)
         if existing_candidate:
-            logger.info(f"候选人已存在，更新信息: {candidate_data['userid']}")
+            logger.info(f"候选人已存在，更新信息: {userid} ({candidate_data.get('name', 'Unknown')})")
             # 可以选择更新现有候选人信息或跳过
             return True
         
         # 创建新候选人记录
+        logger.info(f"准备创建候选人记录: userid={userid}, name={candidate_data.get('name', 'Unknown')}")
         success = await bitable_client.create_candidate_record(candidate_data)
         if success:
-            logger.info(f"候选人记录创建成功: {candidate_data['name']} ({candidate_data['userid']})")
+            logger.info(f"✅ 候选人记录创建成功: {candidate_data['name']} ({userid})")
             return True
         else:
-            logger.error(f"候选人记录创建失败: {candidate_data['userid']}")
+            logger.error(f"❌ 候选人记录创建失败: {userid}")
             return False
             
     except Exception as e:
-        logger.error(f"保存候选人到表格时出错: {str(e)}")
+        logger.error(f"❌ 保存候选人到表格时出错: {str(e)}")
+        logger.error(f"候选人数据: {candidate_data}")
         return False
+
+
+async def handle_assign_task_command(user_id: str, command: str, chat_id: str = None):
+    """处理手动分配任务命令"""
+    try:
+        # 获取所有待分配的任务（状态为pending）
+        all_tasks = await bitable_client.get_all_tasks_sorted(page_size=100, page=0)
+        
+        if not all_tasks or 'tasks' not in all_tasks:
+            await feishu_service.send_message(
+                user_id=user_id,
+                message="❌ 获取任务列表失败"
+            )
+            return
+        
+        # 筛选出待分配的任务（使用英文字段名）
+        pending_tasks = [t for t in all_tasks['tasks'] if t.get('status') == 'pending']
+        
+        if not pending_tasks:
+            await feishu_service.send_message(
+                user_id=user_id,
+                message="✅ 当前没有待分配的任务"
+            )
+            return
+        
+        # 发送任务选择卡片
+        await _send_assign_task_selection_card(user_id, pending_tasks[:10], chat_id)
+        
+    except Exception as e:
+        logger.error(f"处理手动分配任务命令时出错: {str(e)}")
+        await feishu_service.send_message(
+            user_id=user_id,
+            message="处理分配任务命令时出错，请稍后重试。"
+        )
+
+async def _send_assign_task_selection_card(user_id: str, tasks: list, chat_id: str = None):
+    """发送任务选择卡片"""
+    try:
+        card_elements = []
+        
+        # 标题
+        card_elements.append({
+            "tag": "div",
+            "text": {
+                "tag": "lark_md",
+                "content": f"**📋 手动分配任务**\n\n请选择要分配的任务（共 {len(tasks)} 个待分配任务）："
+            }
+        })
+        
+        card_elements.append({"tag": "hr"})
+        
+        # 任务列表
+        for i, task in enumerate(tasks, 1):
+            task_id = task.get('taskid', task.get('任务ID', 'Unknown'))
+            title = task.get('title', task.get('任务标题', '未知任务'))
+            urgency = task.get('urgency', task.get('紧急程度', 'normal'))
+            skills = task.get('skilltags', task.get('技能标签', []))
+            
+            # 紧急程度图标
+            urgency_icon = {
+                'urgent': '🚨',
+                'high': '🔴',
+                'normal': '🟡',
+                'low': '🟢'
+            }.get(urgency, '⚪')
+            
+            # 技能标签显示
+            if isinstance(skills, list):
+                skills_text = ', '.join(skills[:3])
+                if len(skills) > 3:
+                    skills_text += '...'
+            else:
+                skills_text = str(skills)
+            
+            task_info = f"{urgency_icon} **{i}. {title}**\n" \
+                       f"🆔 任务ID: {task_id}\n" \
+                       f"🎯 技能: {skills_text}"
+            
+            card_elements.append({
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": task_info
+                }
+            })
+            
+            # 选择按钮
+            card_elements.append({
+                "tag": "action",
+                "actions": [{
+                    "tag": "button",
+                    "text": {
+                        "tag": "plain_text",
+                        "content": f"👉 选择任务 {i}"
+                    },
+                    "type": "primary",
+                    "value": {
+                        "action": "assign_select_task",
+                        "task_id": task_id
+                    }
+                }]
+            })
+            
+            if i < len(tasks):
+                card_elements.append({"tag": "hr"})
+        
+        # 构建完整卡片
+        card = {
+            "config": {"wide_screen_mode": True},
+            "elements": card_elements
+        }
+        
+        # 发送卡片
+        await feishu_service.send_card_message(
+            user_id=user_id,
+            card=card,
+            chat_id=chat_id
+        )
+        
+    except Exception as e:
+        logger.error(f"发送任务选择卡片时出错: {str(e)}")
+        await feishu_service.send_message(
+            user_id=user_id,
+            message="生成任务选择卡片时出错，请稍后重试。"
+        )
+
+async def handle_assign_select_candidates(user_id: str, task_id: str, chat_id: str = None):
+    """处理选择候选人进行分配"""
+    try:
+        # 获取任务信息
+        task = await bitable_client.get_task(task_id)
+        if not task:
+            await feishu_service.send_message(
+                user_id=user_id,
+                message=f"❌ 未找到任务: {task_id}"
+            )
+            return
+        
+        # 获取所有候选人
+        candidates = await bitable_client.get_all_candidates()
+        if not candidates:
+            await feishu_service.send_message(
+                user_id=user_id,
+                message="❌ 暂无可用候选人"
+            )
+            return
+        
+        # 发送候选人选择卡片
+        await _send_assign_candidate_selection_card(user_id, task, candidates[:10], chat_id)
+        
+    except Exception as e:
+        logger.error(f"处理选择候选人时出错: {str(e)}")
+        await feishu_service.send_message(
+            user_id=user_id,
+            message="处理候选人选择时出错，请稍后重试。"
+        )
+
+async def _send_assign_candidate_selection_card(user_id: str, task: dict, candidates: list, chat_id: str = None):
+    """发送候选人选择卡片"""
+    try:
+        card_elements = []
+        
+        # 任务信息
+        task_id = task.get('taskid', task.get('任务ID', 'Unknown'))
+        title = task.get('title', task.get('任务标题', '未知任务'))
+        skills = task.get('skilltags', task.get('技能标签', []))
+        
+        if isinstance(skills, str):
+            skills_text = skills
+        elif isinstance(skills, list):
+            skills_text = ', '.join(skills)
+        else:
+            skills_text = '通用'
+        
+        card_elements.append({
+            "tag": "div",
+            "text": {
+                "tag": "lark_md",
+                "content": f"**👥 选择候选人**\n\n**任务**: {title}\n**任务ID**: {task_id}\n**技能要求**: {skills_text}\n\n请选择要分配的候选人："
+            }
+        })
+        
+        card_elements.append({"tag": "hr"})
+        
+        # 候选人列表
+        for i, candidate in enumerate(candidates, 1):
+            name = candidate.get('name', '未知')
+            candidate_id = candidate.get('user_id', '')
+            candidate_skills = candidate.get('skill_tags', [])
+            experience = candidate.get('experience', 0)
+            
+            skills_display = ', '.join(candidate_skills[:5]) if isinstance(candidate_skills, list) else str(candidate_skills)
+            if isinstance(candidate_skills, list) and len(candidate_skills) > 5:
+                skills_display += '...'
+            
+            candidate_info = f"**{i}. {name}**\n" \
+                           f"🎯 技能: {skills_display}\n" \
+                           f"💼 经验: {experience}年"
+            
+            card_elements.append({
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": candidate_info
+                }
+            })
+            
+            # 分配按钮
+            card_elements.append({
+                "tag": "action",
+                "actions": [{
+                    "tag": "button",
+                    "text": {
+                        "tag": "plain_text",
+                        "content": f"✅ 分配给 {name}"
+                    },
+                    "type": "primary",
+                    "value": {
+                        "action": "assign_to_candidate",
+                        "task_id": task_id,
+                        "candidate_id": candidate_id
+                    }
+                }]
+            })
+            
+            if i < len(candidates):
+                card_elements.append({"tag": "hr"})
+        
+        # 构建完整卡片
+        card = {
+            "config": {"wide_screen_mode": True},
+            "elements": card_elements
+        }
+        
+        # 发送卡片
+        await feishu_service.send_card_message(
+            user_id=user_id,
+            card=card,
+            chat_id=chat_id
+        )
+        
+    except Exception as e:
+        logger.error(f"发送候选人选择卡片时出错: {str(e)}")
+        await feishu_service.send_message(
+            user_id=user_id,
+            message="生成候选人选择卡片时出错，请稍后重试。"
+        )
+
+async def handle_assign_confirm(user_id: str, task_id: str, candidate_id: str, chat_id: str = None):
+    """确认分配任务给候选人"""
+    try:
+        # 获取任务信息
+        task = await bitable_client.get_task(task_id)
+        if not task:
+            await feishu_service.send_message(
+                user_id=user_id,
+                message=f"❌ 未找到任务: {task_id}"
+            )
+            return
+        
+        # 获取候选人信息
+        candidates = await bitable_client.get_all_candidates()
+        candidate = next((c for c in candidates if c.get('user_id') == candidate_id), None)
+        
+        if not candidate:
+            await feishu_service.send_message(
+                user_id=user_id,
+                message=f"❌ 未找到候选人: {candidate_id}"
+            )
+            return
+        
+        # 更新任务状态为已分配
+        # 注意：多维表格中暂时没有"分配给"字段，只更新状态
+        update_data = {
+            '任务状态': 'assigned'
+            # '分配给': [{"id": candidate_id}]  # 待添加字段后启用
+        }
+        
+        success = await bitable_client.update_task(task_id, update_data)
+        
+        if success:
+            # 创建任务协作群
+            task_title = task.get('title', task.get('任务标题', '未知任务'))
+            chat_name = f"任务协作群-{task_id[:8]}"
+            members = [user_id, candidate_id]
+            
+            # 如果配置了机器人用户ID，将机器人也添加到群聊中
+            from app.config import settings
+            if settings.feishu_bot_user_id:
+                members.append(settings.feishu_bot_user_id)
+            
+            group_chat_id = await feishu_service.create_chat(chat_name, members)
+            
+            # 发送成功消息
+            success_message = f"""✅ **任务分配成功！**
+
+📋 **任务**: {task_title}
+🆔 **任务ID**: {task_id}
+👤 **分配给**: {candidate.get('name', '未知')}
+💬 **协作群**: {'已创建' if group_chat_id else '创建失败，请手动联系'}
+
+任务状态已更新为"已分配"。"""
+            
+            await feishu_service.send_message(
+                user_id=user_id,
+                message=success_message
+            )
+            
+            # 通知候选人
+            if group_chat_id:
+                notification = f"""🎯 **新任务分配通知**
+
+您被分配了新任务：
+
+📋 **任务**: {task_title}
+🆔 **任务ID**: {task_id}
+👤 **分配人**: HR
+
+请在本群中与团队协作完成任务。"""
+                
+                await feishu_service.send_message_to_chat(
+                    chat_id=group_chat_id,
+                    message=notification
+                )
+            else:
+                # 如果群创建失败，直接通知候选人
+                await feishu_service.send_message(
+                    user_id=candidate_id,
+                    message=f"🎯 您被分配了新任务：{task_title} (ID: {task_id})，请及时查看任务详情。"
+                )
+            
+            logger.info(f"任务 {task_id} 已手动分配给候选人 {candidate_id}")
+        else:
+            await feishu_service.send_message(
+                user_id=user_id,
+                message=f"❌ 任务分配失败，请稍后重试"
+            )
+        
+    except Exception as e:
+        logger.error(f"确认分配任务时出错: {str(e)}")
+        await feishu_service.send_message(
+            user_id=user_id,
+            message="分配任务时出错，请稍后重试。"
+        )
