@@ -1,0 +1,76 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "taskbot-mvp"
+version = "0.2.0"
+description = "Feishu task dispatch bot with LLM-powered matching and verification"
+requires-python = ">=3.11"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = [
+    ".venv",
+    "build",
+    "dist",
+    "docs",
+    "app.log",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "PL"]
+ignore = [
+    "E501",   # line length handled by formatter, allow long Chinese lines
+    "B008",   # FastAPI Depends() pattern
+    "PLR0913",
+    "PLR2004",
+    "PLR0912",
+    "PLR0915",
+    "PLR0911",
+    "B904",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["PLR2004", "B011", "F401", "F811"]
+"main.py" = ["E402"]
+"conftest.py" = ["E402"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+warn_unused_configs = true
+follow_imports = "silent"
+disable_error_code = ["import-untyped", "import-not-found"]
+
+[[tool.mypy.overrides]]
+module = ["lark_oapi.*", "pdfplumber.*", "PyPDF2.*"]
+ignore_errors = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
+
+[tool.coverage.run]
+source = ["app"]
+omit = [
+    "app/__init__.py",
+    "app/router/__init__.py",
+    "app/services/__init__.py",
+    "*/tests/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]

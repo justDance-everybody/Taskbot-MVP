@@ -12,6 +12,11 @@ from app.services.match import MatchService
 
 logger = logging.getLogger(__name__)
 
+# Module-level wrapper singleton — pytest patches `app.services.task_manager.bitable_client`,
+# so reading it from inside ``TaskManager.__init__`` lets tests inject a mock by constructing
+# ``TaskManager()`` inside the patch context.
+bitable_client = BitableClient()
+
 class TaskStatus(Enum):
     """任务状态枚举"""
     PENDING = "pending"  # 待分配
@@ -34,7 +39,7 @@ class TaskManager:
     """任务管理器"""
     
     def __init__(self):
-        self.bitable = BitableClient()
+        self.bitable = bitable_client
         self.feishu = FeishuService()
     
     def _extract_user_id(self, user_field: Any) -> Optional[str]:
@@ -548,7 +553,7 @@ class TaskManager:
                 return {'total_records': 0, 'valid_records': 0, 'empty_records': 0}
             
             # 获取表格记录 - 通过 client 访问
-            result = self.bitable.client.get_table_records(task_table_id)
+            result = self.bitable.get_table_records(task_table_id)
             records = result.get('data', {}).get('items', [])
             
             # 统计基本信息
@@ -586,7 +591,7 @@ class TaskManager:
                 return "N/A"
             
             # 获取表格记录 - 通过 client 访问
-            result = self.bitable.client.get_table_records(task_table_id)
+            result = self.bitable.get_table_records(task_table_id)
             records = result.get('data', {}).get('items', [])
             
             # 计算已分配任务的平均耗时
