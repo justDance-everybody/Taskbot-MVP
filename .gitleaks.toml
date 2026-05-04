@@ -1,0 +1,21 @@
+# Gitleaks config for Taskbot-MVP.
+# We rely on the default rule set; this file just lets us scope ignored paths.
+title = "Taskbot-MVP gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Allowlisted paths/regexes — placeholders only"
+paths = [
+    '''\.env\.example$''',
+    '''docs/.*''',
+    '''README\.md$''',
+    '''.*BUGFIX_.*\.md$''',
+    '''ACHIEVEMENT_SUMMARY\.txt$''',
+]
+regexes = [
+    # Sanitized placeholders we use in .env.example and tests.
+    '''<REPLACE_ME>''',
+    '''test_(app_id|app_secret|verify_token|bitable_token|task_table|person_table|github_secret|deepseek_key)''',
+]

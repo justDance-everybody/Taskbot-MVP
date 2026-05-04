@@ -1,22 +1,23 @@
+
 from pydantic_settings import BaseSettings
-from typing import Optional
+
 
 class Settings(BaseSettings):
     # 飞书机器人配置
     feishu_app_id: str
     feishu_app_secret: str
     feishu_verify_token: str
-    feishu_encrypt_key: Optional[str] = None
-    feishu_bot_user_id: Optional[str] = None  # 机器人的用户ID（可选，用于群聊邀请）
+    feishu_encrypt_key: str | None = None
+    feishu_bot_user_id: str | None = None  # 机器人的用户ID（可选，用于群聊邀请）
     
     # LLM 模型配置
-    deepseek_key: Optional[str] = None
-    gemini_key: Optional[str] = None
+    deepseek_key: str | None = None
+    gemini_key: str | None = None
     gemini_model: str = "gemini-1.5-flash"  # Gemini 模型名称
-    openai_key: Optional[str] = None
+    openai_key: str | None = None
     
     # GitHub Webhook 配置
-    github_webhook_secret: Optional[str] = None
+    github_webhook_secret: str | None = None
     
     # 服务配置
     server_host: str = "0.0.0.0"
@@ -33,7 +34,14 @@ class Settings(BaseSettings):
     default_llm_model: str = "deepseek"
     llm_timeout: int = 30
     max_retry_attempts: int = 3
-    
+    prd_parse_timeout_seconds: int = 30
+    prd_completeness_threshold: int = 70
+
+    # 匹配配置
+    match_mode: str = "full"  # "simple"=零 LLM 仅 prefilter, "full"=两阶段
+    match_prefilter_limit: int = 30
+    match_top_n: int = 2
+
     # 任务配置
     task_timeout_hours: int = 48
     max_revision_attempts: int = 2

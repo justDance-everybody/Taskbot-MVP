@@ -604,6 +604,12 @@ class BitableClient:
         # 都不是，直接获取
         return fields.get(field_name, default)
     
+    def get_table_records(self, table_id, page_token=None):
+        """Forward to the inner FeishuBitableClient (kept for backward-compat tests)."""
+        if self.client is None:
+            return {"data": {"items": []}}
+        return self.client.get_table_records(table_id, page_token)
+
     async def create_table(self, app_token, table_name):
         """创建新的数据表
         
@@ -917,12 +923,19 @@ class BitableClient:
                 total_tasks = safe_int(fields.get('total_tasks', 0))
                 average_score = safe_float(fields.get('average_score', 0))
                 
-                # 根据新的字段结构构建候选人信息
+                # 字段名兼容: 既接受 userid/skilltags(老 schema) 也接受 user_id/skill_tags(新 schema)
+                raw_user_id = fields.get('user_id') or fields.get('userid', '')
+                raw_skills = fields.get('skill_tags') or fields.get('skilltags', [])
+                if isinstance(raw_skills, str):
+                    raw_skills = [s.strip() for s in raw_skills.split(',') if s.strip()]
+                elif not isinstance(raw_skills, list):
+                    raw_skills = []
+
                 candidate = {
                     'record_id': record.get('record_id'),
-                    'user_id': fields.get('user_id', ''),  # 修复：使用 user_id 而不是 userid
+                    'user_id': raw_user_id,
                     'name': fields.get('name', 'Unknown'),
-                    'skill_tags': fields.get('skill_tags', []) if isinstance(fields.get('skill_tags'), list) else [],  # 修复：skill_tags 已经是列表
+                    'skill_tags': raw_skills,
                     'job_level': fields.get('job_level', ''),
                     'experience': experience,
                     'total_tasks': total_tasks,

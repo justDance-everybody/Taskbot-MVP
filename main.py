@@ -1,16 +1,20 @@
-import logging
 import asyncio
+import logging
 from contextlib import asynccontextmanager
+
+import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-import uvicorn
-from app.config import settings
+
 from app.api import router as api_router
-from app.webhooks import router as webhook_router, setup_websocket_client
+from app.config import settings
 from app.router.github_hook import router as github_webhook_router
+from app.router.test_endpoints import router as test_router
 from app.services.task_manager import task_manager
+from app.webhooks import router as webhook_router
+from app.webhooks import setup_websocket_client
 
 # 配置日志
 logging.basicConfig(
@@ -168,6 +172,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 app.include_router(api_router)
 app.include_router(webhook_router)
 app.include_router(github_webhook_router)
+app.include_router(test_router)
 
 # 静态文件服务（如果需要前端界面）
 try:
