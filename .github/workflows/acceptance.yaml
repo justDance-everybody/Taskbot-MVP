@@ -1,0 +1,52 @@
+# Acceptance verification workflow — issue #12 §3.
+#
+# This workflow runs on every PR open/update for repos that opt in (the
+# task creation flow embeds an `acceptance:` YAML block in the GitHub
+# issue body — see app/services/acceptance.py). The check_run results
+# land at the Taskbot /webhooks/github endpoint, where the AI reviewer
+# decides auto_merge / hr_review / auto_bounce.
+#
+# Repos that don't use Taskbot can ignore this file.
+name: Acceptance
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - run: pytest tests/ --cov=app --cov-report=xml
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ github.sha }}
+          path: coverage.xml
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - run: ruff check .
+
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - run: mypy app
