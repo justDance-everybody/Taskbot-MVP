@@ -46,6 +46,13 @@ class Settings(BaseSettings):
     task_timeout_hours: int = 48
     max_revision_attempts: int = 2
     ai_score_threshold: int = 80
+
+    # 分配模式: "manual"(默认,HR 选), "auto"(N1 算完直接派 Top-1)
+    assign_mode: str = "manual"
+    max_qa_rounds: int = 3
+    reject_fallback_seconds: int = 5
+    idempotency_ttl_hours: int = 24
+    idempotency_db_path: str = "/tmp/taskbot_idempotency.sqlite3"
     
     model_config = {
         "env_file": ".env",
