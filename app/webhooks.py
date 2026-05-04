@@ -49,16 +49,49 @@ def _get_job_level_text(job_level) -> str:
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 feishu_service = FeishuService()
 
+def _verify_feishu_signature(raw_body: bytes, headers: dict[str, str]) -> bool:
+    """Verify the X-Lark-Signature header against settings.feishu_verify_token.
+
+    Algorithm (Feishu v1): sha256(timestamp + nonce + verify_token + body).
+    Returns True if signature is missing AND request is a URL verification
+    challenge (legacy compatibility); otherwise demands a valid signature.
+    """
+    sig = headers.get("x-lark-signature") or headers.get("X-Lark-Signature")
+    ts = headers.get("x-lark-request-timestamp") or headers.get("X-Lark-Request-Timestamp")
+    nonce = headers.get("x-lark-request-nonce") or headers.get("X-Lark-Request-Nonce")
+    if not sig:
+        # No signature header — only legacy URL verification path is allowed through.
+        try:
+            payload = json.loads(raw_body.decode() or "{}")
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return False
+        return payload.get("type") == "url_verification"
+
+    if not ts or not nonce:
+        return False
+
+    token = settings.feishu_verify_token or ""
+    digest = hashlib.sha256((ts + nonce + token).encode() + raw_body).hexdigest()
+    return hmac.compare_digest(digest, sig)
+
+
 @router.post("/feishu")
 async def feishu_webhook(request: Request):
     """
     飞书Webhook端点
     处理飞书事件订阅的验证和事件推送
     """
+    # Use a module-private alias to avoid shadowing by inner `import json`
+    # statements scattered through the legacy body of this function (which
+    # cause UnboundLocalError when `json` is referenced before the inner import).
+    import json as _json_top
     try:
-        # 获取请求体
-        body = await request.json()
-        
+        raw_body = await request.body()
+        if not _verify_feishu_signature(raw_body, dict(request.headers)):
+            logger.warning("Feishu webhook signature verification failed")
+            raise HTTPException(status_code=401, detail="invalid signature")
+        body = _json_top.loads(raw_body.decode() or "{}")
+
         # 处理URL验证（challenge）
         if body.get("type") == "url_verification":
             challenge = body.get("challenge", "")
@@ -175,7 +208,10 @@ async def feishu_webhook(request: Request):
         
         # 返回成功响应
         return {"code": 0, "msg": "success"}
-        
+
+    except HTTPException:
+        # Signature 401s (and any other deliberate HTTPException) must propagate.
+        raise
     except Exception as e:
         logger.error(f"处理飞书Webhook失败: {str(e)}")
         return {"code": -1, "msg": str(e)}
@@ -2446,14 +2482,9 @@ async def handle_candidate_selection(user_id: str, action_value: Dict[str, Any])
             message="处理候选人选择时发生错误，请稍后重试"
         )
 
-def _verify_feishu_signature(body: bytes, headers: Dict[str, str]) -> bool:
-    """验证Feishu请求签名"""
-    try:
-        # 签名验证已简化，生产环境请实现完整验证逻辑
-        return True
-    except Exception as e:
-        logger.error(f"Error verifying Feishu signature: {str(e)}")
-        return False
+# Note: real _verify_feishu_signature lives near the top of this file.
+# (The earlier always-True stub here was removed in PR-B.)
+
 
 def _verify_github_signature(body: bytes, signature: str) -> bool:
     """验证GitHub请求签名"""

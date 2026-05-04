@@ -159,7 +159,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 全局异常处理
+from fastapi import HTTPException
+from fastapi.exception_handlers import http_exception_handler
+
+
+# Let HTTPException through with its declared status code (401, 404, etc).
+# Without this, the broad Exception handler below would convert every
+# HTTPException into a 500.
+@app.exception_handler(HTTPException)
+async def passthrough_http_exception(request: Request, exc: HTTPException):
+    return await http_exception_handler(request, exc)
+
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     logger.error(f"Global exception: {str(exc)}", exc_info=True)
