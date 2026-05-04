@@ -12,9 +12,9 @@ All Bitable + LLM access is mocked. Verifies:
 from __future__ import annotations
 
 import json
+from unittest.mock import AsyncMock, patch
 
 import pytest
-from unittest.mock import AsyncMock, patch
 
 from app.services.match import MatchService, _norm_skill
 

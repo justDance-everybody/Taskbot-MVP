@@ -19,7 +19,7 @@ import json
 import logging
 import re
 from dataclasses import asdict, dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from app.config import settings
 from app.services.llm import llm_service
@@ -66,19 +66,19 @@ _USER_PROMPT_TMPL = """请解析以下 PRD:
 @dataclass
 class ParsedPRD:
     title: str = ""
-    skills: List[str] = field(default_factory=list)
-    deadline: Optional[str] = None
+    skills: list[str] = field(default_factory=list)
+    deadline: str | None = None
     description: str = ""
-    estimated_hours: List[float] = field(default_factory=lambda: [0.0, 0.0])
+    estimated_hours: list[float] = field(default_factory=lambda: [0.0, 0.0])
     completeness: int = 0
-    risks: List[str] = field(default_factory=list)
-    suggestions: List[str] = field(default_factory=list)
+    risks: list[str] = field(default_factory=list)
+    suggestions: list[str] = field(default_factory=list)
     needs_optimization: bool = False
     needs_fallback: bool = False
-    fallback_reason: Optional[str] = None
-    raw_response: Optional[str] = None
+    fallback_reason: str | None = None
+    raw_response: str | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
@@ -86,8 +86,8 @@ class PRDParser:
     def __init__(
         self,
         llm: Any = None,
-        timeout_seconds: Optional[int] = None,
-        completeness_threshold: Optional[int] = None,
+        timeout_seconds: int | None = None,
+        completeness_threshold: int | None = None,
     ) -> None:
         self.llm = llm or llm_service
         self.timeout_seconds = timeout_seconds or settings.prd_parse_timeout_seconds
@@ -105,7 +105,7 @@ class PRDParser:
                 self.llm.call(_USER_PROMPT_TMPL.format(text=text), _SYSTEM_PROMPT),
                 timeout=self.timeout_seconds,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("PRD parse timed out after %ss; falling back", self.timeout_seconds)
             return ParsedPRD(needs_fallback=True, fallback_reason="llm_timeout")
         except Exception as exc:  # pragma: no cover - generic safety net
@@ -178,7 +178,7 @@ def _extract_json_block(text: str) -> str:
     return obj.group(0) if obj else text.strip()
 
 
-def _normalize_deadline(value: Any) -> Optional[str]:
+def _normalize_deadline(value: Any) -> str | None:
     if value is None or value == "":
         return None
     s = str(value).strip()
@@ -190,7 +190,7 @@ def _normalize_deadline(value: Any) -> Optional[str]:
     return f"{int(year):04d}-{int(month):02d}-{int(day):02d}"
 
 
-def _heuristic_completeness(data: Dict[str, Any], original_text: str) -> int:
+def _heuristic_completeness(data: dict[str, Any], original_text: str) -> int:
     """Score 0-100 when LLM didn't supply one. Each present field worth ~20 pts."""
     score = 0
     if data.get("title"):

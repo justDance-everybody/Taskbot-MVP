@@ -1,11 +1,11 @@
-import logging
-from typing import List, Dict, Any, Optional, Tuple
-from datetime import datetime, timedelta
 import json
+import logging
 import re
+from typing import Any
+
+from app.bitable import BitableClient, bitable_client
 from app.config import settings
 from app.services.llm import llm_service
-from app.bitable import bitable_client, BitableClient
 
 logger = logging.getLogger(__name__)
 
@@ -29,12 +29,12 @@ class MatchService:
 
     async def two_stage_match(
         self,
-        task_data: Dict[str, Any],
+        task_data: dict[str, Any],
         *,
-        mode: Optional[str] = None,
-        prefilter_limit: Optional[int] = None,
-        top_n: Optional[int] = None,
-    ) -> List[Dict[str, Any]]:
+        mode: str | None = None,
+        prefilter_limit: int | None = None,
+        top_n: int | None = None,
+    ) -> list[dict[str, Any]]:
         """Stage 1: prefilter_by_tags (pure Bitable, no LLM, ≤ prefilter_limit).
         Stage 2: rerank_by_llm (Top-N + recommendation_reason).
 
@@ -61,10 +61,10 @@ class MatchService:
 
     async def prefilter_by_tags(
         self,
-        required_skills: List[str],
+        required_skills: list[str],
         *,
         limit: int = 30,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Bitable-only filter. Score = #matched_skills + small recency bonus.
 
         Returns up to ``limit`` candidates with status=available, sorted by
@@ -77,7 +77,7 @@ class MatchService:
             return []
 
         required_set = {_norm_skill(s) for s in (required_skills or []) if s}
-        scored: List[Dict[str, Any]] = []
+        scored: list[dict[str, Any]] = []
 
         for cand in all_candidates:
             if cand.get("status") and cand.get("status") != "available":
@@ -106,11 +106,11 @@ class MatchService:
 
     async def rerank_by_llm(
         self,
-        task_data: Dict[str, Any],
-        candidates: List[Dict[str, Any]],
+        task_data: dict[str, Any],
+        candidates: list[dict[str, Any]],
         *,
         top_n: int = 2,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """LLM-driven Top-N reranking. Each result includes recommendation_reason."""
         if not candidates:
             return []
@@ -132,8 +132,8 @@ class MatchService:
 
     def _build_rerank_user_prompt(
         self,
-        task_data: Dict[str, Any],
-        candidates: List[Dict[str, Any]],
+        task_data: dict[str, Any],
+        candidates: list[dict[str, Any]],
         *,
         top_n: int,
     ) -> str:
@@ -160,8 +160,8 @@ class MatchService:
     def _parse_rerank_response(
         self,
         response: str,
-        candidates: List[Dict[str, Any]],
-    ) -> List[Dict[str, Any]]:
+        candidates: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
         if not response:
             return []
         json_str = response
@@ -180,7 +180,7 @@ class MatchService:
             return []
 
         by_id = {c.get("user_id"): c for c in candidates if c.get("user_id")}
-        result: List[Dict[str, Any]] = []
+        result: list[dict[str, Any]] = []
         for m in data.get("matches", []):
             uid = m.get("user_id")
             if uid not in by_id:
@@ -191,7 +191,7 @@ class MatchService:
             result.append(merged)
         return result
     
-    async def find_top_candidates(self, task_data: Dict[str, Any], limit: int = 2) -> List[Dict[str, Any]]:
+    async def find_top_candidates(self, task_data: dict[str, Any], limit: int = 2) -> list[dict[str, Any]]:
         """为任务找到Top-N候选人（默认Top-2）"""
         try:
             # 获取所有可用候选人，限制候选人池最多15人
@@ -216,7 +216,7 @@ class MatchService:
             logger.error(f"匹配候选人时出错: {str(e)}")
             return []
     
-    async def _llm_match_candidates(self, task_data: Dict[str, Any], candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    async def _llm_match_candidates(self, task_data: dict[str, Any], candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """使用LLM进行候选人匹配"""
         try:
             # 构建匹配提示词
@@ -251,7 +251,7 @@ class MatchService:
 请为每个候选人计算匹配分数（0-100），并提供匹配理由。
 """
     
-    def _build_match_user_prompt(self, task_data: Dict[str, Any], candidates: List[Dict[str, Any]]) -> str:
+    def _build_match_user_prompt(self, task_data: dict[str, Any], candidates: list[dict[str, Any]]) -> str:
         """构建匹配用户提示词"""
         task_info = f"""
 任务信息：
@@ -291,7 +291,7 @@ class MatchService:
 }}
 """
     
-    def _parse_match_response(self, response: str, candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _parse_match_response(self, response: str, candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """解析LLM匹配响应"""
         try:
             # 尝试解析JSON响应
@@ -323,7 +323,7 @@ class MatchService:
             # 降级到基础匹配
             return self._basic_match_candidates({}, candidates)
     
-    def _basic_match_candidates(self, task_data: Dict[str, Any], candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _basic_match_candidates(self, task_data: dict[str, Any], candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """基础匹配算法（降级方案）"""
         try:
             skill_requirements = set(task_data.get("skill_tags", []))
@@ -356,7 +356,7 @@ class MatchService:
             logger.error(f"基础匹配算法出错: {str(e)}")
             return candidates
     
-    async def calculate_match_score(self, task_data: Dict[str, Any], candidate: Dict[str, Any]) -> Tuple[int, str]:
+    async def calculate_match_score(self, task_data: dict[str, Any], candidate: dict[str, Any]) -> tuple[int, str]:
         """计算单个候选人的匹配分数"""
         try:
             skill_requirements = set(task_data.get("skill_tags", []))

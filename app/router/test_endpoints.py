@@ -10,7 +10,7 @@ they just call the underlying service and return the structured result.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
@@ -30,14 +30,14 @@ class ParsePRDRequest(BaseModel):
 class TwoStageMatchRequest(BaseModel):
     title: str = ""
     description: str = ""
-    skills: List[str] = Field(default_factory=list)
-    deadline: Optional[str] = None
-    mode: Optional[str] = None  # simple | full | None(=use settings default)
-    top_n: Optional[int] = None
+    skills: list[str] = Field(default_factory=list)
+    deadline: str | None = None
+    mode: str | None = None  # simple | full | None(=use settings default)
+    top_n: int | None = None
 
 
 @router.post("/parse_prd")
-async def parse_prd(payload: ParsePRDRequest) -> Dict[str, Any]:
+async def parse_prd(payload: ParsePRDRequest) -> dict[str, Any]:
     """Parse a free-form PRD description into structured task fields.
 
     Returns the full ``ParsedPRD`` dict including completeness, risks,
@@ -49,7 +49,7 @@ async def parse_prd(payload: ParsePRDRequest) -> Dict[str, Any]:
 
 
 @router.post("/match")
-async def two_stage_match(payload: TwoStageMatchRequest) -> Dict[str, Any]:
+async def two_stage_match(payload: TwoStageMatchRequest) -> dict[str, Any]:
     """Run the two-stage matcher and return the Top-N candidates.
 
     The mode parameter mirrors the MATCH_MODE env var: 'simple' skips the

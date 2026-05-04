@@ -1,13 +1,11 @@
-import json
 import logging
-from datetime import datetime, timedelta
-from typing import List, Dict, Any, Optional
+from datetime import datetime
 from enum import Enum
-import asyncio
-from app.config import settings
+from typing import Any
+
 from app.bitable import BitableClient
+from app.config import settings
 from app.services.feishu import FeishuService
-from app.services.llm import llm_service
 from app.services.match import MatchService
 
 logger = logging.getLogger(__name__)
@@ -42,7 +40,7 @@ class TaskManager:
         self.bitable = bitable_client
         self.feishu = FeishuService()
     
-    def _extract_user_id(self, user_field: Any) -> Optional[str]:
+    def _extract_user_id(self, user_field: Any) -> str | None:
         """从用户字段中提取user_id（支持多种格式）"""
         try:
             if isinstance(user_field, str):
@@ -61,7 +59,7 @@ class TaskManager:
             logger.error(f"Error extracting user_id: {str(e)}")
             return None
     
-    async def create_task(self, task_data: Dict[str, Any]) -> str:
+    async def create_task(self, task_data: dict[str, Any]) -> str:
         """创建新任务"""
         try:
             # 验证必要字段
@@ -93,7 +91,7 @@ class TaskManager:
             logger.error(f"创建任务失败: {str(e)}")
             raise
     
-    async def _auto_assign_task(self, task_id: str, task_data: Dict[str, Any]):
+    async def _auto_assign_task(self, task_id: str, task_data: dict[str, Any]):
         """自动分配任务"""
         try:
             # 获取可用候选人
@@ -227,7 +225,7 @@ class TaskManager:
             logger.error(f"Error submitting task {task_id}: {str(e)}")
             return False
     
-    async def _auto_quality_check(self, task_id: str, task_data: Dict[str, Any], 
+    async def _auto_quality_check(self, task_id: str, task_data: dict[str, Any], 
                                  submission_url: str, submitted_by: str = None, chat_id: str = None):
         """自动质量检查"""
         try:
@@ -270,7 +268,7 @@ class TaskManager:
                 'review_note': f"AI审核失败，需要人工审核: {str(e)}"
             })
     
-    async def _complete_task(self, task_id: str, task_data: Dict[str, Any], score: int, 
+    async def _complete_task(self, task_id: str, task_data: dict[str, Any], score: int, 
                            submitted_by: str = None, chat_id: str = None):
         """完成任务"""
         try:
@@ -358,8 +356,8 @@ class TaskManager:
         except Exception as e:
             logger.error(f"Error completing task {task_id}: {str(e)}")
     
-    async def _reject_task(self, task_id: str, task_data: Dict[str, Any], 
-                          score: int, failed_reasons: List[str], submitted_by: str = None, chat_id: str = None):
+    async def _reject_task(self, task_id: str, task_data: dict[str, Any], 
+                          score: int, failed_reasons: list[str], submitted_by: str = None, chat_id: str = None):
         """拒绝任务"""
         try:
             # 获取字段值（支持中英文字段名）
@@ -428,7 +426,7 @@ class TaskManager:
         except Exception as e:
             logger.error(f"Error rejecting task {task_id}: {str(e)}")
     
-    async def get_task_status(self, task_id: str) -> Optional[Dict[str, Any]]:
+    async def get_task_status(self, task_id: str) -> dict[str, Any] | None:
         """获取任务状态"""
         try:
             return await self.bitable.get_task(task_id)
@@ -436,7 +434,7 @@ class TaskManager:
             logger.error(f"Error getting task status {task_id}: {str(e)}")
             return None
     
-    async def get_user_tasks(self, user_id: str, status: str = None) -> List[Dict[str, Any]]:
+    async def get_user_tasks(self, user_id: str, status: str = None) -> list[dict[str, Any]]:
         """获取用户任务列表"""
         try:
             # 这里需要根据实际的Bitable API实现
@@ -459,7 +457,7 @@ class TaskManager:
         except Exception as e:
             logger.error(f"Error sending daily reminders: {str(e)}")
     
-    async def generate_daily_report(self) -> Dict[str, Any]:
+    async def generate_daily_report(self) -> dict[str, Any]:
         """生成每日报告 - 统计数据从JSON文件读取，任务信息从多维表格获取"""
         try:
             import json
@@ -472,7 +470,7 @@ class TaskManager:
             
             if os.path.exists(stats_file):
                 try:
-                    with open(stats_file, 'r', encoding='utf-8') as f:
+                    with open(stats_file, encoding='utf-8') as f:
                         base_stats = json.load(f)
                     logger.info(f"从JSON文件读取统计数据: {stats_file}")
                 except Exception as e:
@@ -541,7 +539,7 @@ class TaskManager:
                 }
             }
     
-    async def _get_simple_task_info(self) -> Dict[str, Any]:
+    async def _get_simple_task_info(self) -> dict[str, Any]:
         """从多维表格获取简单的任务信息"""
         try:
             from app.config import settings
@@ -581,8 +579,9 @@ class TaskManager:
     async def _calculate_average_assignment_time(self) -> str:
         """计算平均指派耗时"""
         try:
-            from app.config import settings
             from datetime import datetime
+
+            from app.config import settings
             
             # 获取任务表ID
             task_table_id = getattr(settings, 'feishu_task_table_id', None)
@@ -650,7 +649,7 @@ class TaskManager:
             # 读取现有统计数据
             if os.path.exists(stats_file):
                 try:
-                    with open(stats_file, 'r', encoding='utf-8') as f:
+                    with open(stats_file, encoding='utf-8') as f:
                         stats = json.load(f)
                 except Exception:
                     stats = {}
@@ -728,7 +727,7 @@ class TaskManager:
             
             # 读取现有统计
             if os.path.exists(stats_file):
-                with open(stats_file, 'r', encoding='utf-8') as f:
+                with open(stats_file, encoding='utf-8') as f:
                     stats = json.load(f)
             else:
                 stats = {}
@@ -760,7 +759,7 @@ class TaskManager:
         except Exception as e:
             logger.error(f"增量更新任务统计失败: {str(e)}")
     
-    async def complete_task(self, task_id: str, review_data: Dict[str, Any]) -> bool:
+    async def complete_task(self, task_id: str, review_data: dict[str, Any]) -> bool:
         """完成任务（公共接口）"""
         try:
             task = await self.bitable.get_task(task_id)
@@ -775,7 +774,7 @@ class TaskManager:
             logger.error(f"Error completing task {task_id}: {str(e)}")
             return False
     
-    async def reject_task(self, task_id: str, review_data: Dict[str, Any]) -> bool:
+    async def reject_task(self, task_id: str, review_data: dict[str, Any]) -> bool:
         """拒绝任务（公共接口）"""
         try:
             task = await self.bitable.get_task(task_id)
