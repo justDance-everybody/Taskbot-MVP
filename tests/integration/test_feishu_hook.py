@@ -13,47 +13,50 @@ from httpx import AsyncClient
 
 
 class TestFeishuWebhookSignature:
-    """测试飞书webhook签名验证"""
-    
-    def test_signature_verification_success(self):
-        """测试签名验证成功"""
+    """测试飞书webhook签名验证 — PR-B 启用真实签名校验后重写。"""
+
+    def test_valid_signature_passes(self):
+        """正确签名 → True"""
+        import hashlib
+        from app.config import settings
         from app.webhooks import _verify_feishu_signature
-        
-        # 准备测试数据
+
         body = b'{"test": "data"}'
+        ts = "1234567890"
+        nonce = "test_nonce"
+        token = settings.feishu_verify_token or ""
+        sig = hashlib.sha256((ts + nonce + token).encode() + body).hexdigest()
         headers = {
-            "X-Lark-Signature": "test_signature",
-            "X-Lark-Request-Timestamp": "1234567890",
-            "X-Lark-Request-Nonce": "test_nonce"
+            "x-lark-signature": sig,
+            "x-lark-request-timestamp": ts,
+            "x-lark-request-nonce": nonce,
         }
-        
-        # 当前实现简化了验证，总是返回True
-        # 在生产环境中应该实现完整的签名验证
-        result = _verify_feishu_signature(body, headers)
-        assert result is True
-    
-    def test_signature_verification_missing_headers(self):
-        """测试缺少签名头的情况"""
+        assert _verify_feishu_signature(body, headers) is True
+
+    def test_invalid_signature_fails(self):
+        """错签名 → False"""
         from app.webhooks import _verify_feishu_signature
-        
-        body = b'{"test": "data"}'
-        headers = {}
-        
-        # 即使缺少头部，当前实现也返回True（简化版本）
-        result = _verify_feishu_signature(body, headers)
-        assert result is True
-    
-    def test_signature_verification_invalid_body(self):
-        """测试无效请求体"""
-        from app.webhooks import _verify_feishu_signature
-        
-        body = b''
         headers = {
-            "X-Lark-Signature": "test_signature"
+            "x-lark-signature": "garbage",
+            "x-lark-request-timestamp": "1",
+            "x-lark-request-nonce": "n",
         }
-        
-        result = _verify_feishu_signature(body, headers)
-        assert result is True
+        assert _verify_feishu_signature(b'{"x":1}', headers) is False
+
+    def test_missing_signature_with_non_challenge_body_fails(self):
+        """缺签名头且不是 URL 验证请求 → False"""
+        from app.webhooks import _verify_feishu_signature
+        assert _verify_feishu_signature(b'{"test":"data"}', {}) is False
+
+    def test_missing_signature_with_url_verification_passes(self):
+        """缺签名头但是 URL 验证请求 → True(向后兼容,飞书首次握手时签名头为空)"""
+        from app.webhooks import _verify_feishu_signature
+        assert _verify_feishu_signature(b'{"type":"url_verification","challenge":"x"}', {}) is True
+
+    def test_missing_timestamp_or_nonce_fails(self):
+        """有签名但 timestamp/nonce 缺一 → False"""
+        from app.webhooks import _verify_feishu_signature
+        assert _verify_feishu_signature(b'{}', {"x-lark-signature": "abc"}) is False
 
 
 class TestFeishuMessageEvents:
