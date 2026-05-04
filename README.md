@@ -47,6 +47,22 @@
 | `PRD_PARSE_TIMEOUT_SECONDS` | `30` | `/quicktask` LLM 解析超时;超时后回退到 `/newtask` 表单 |
 | `PRD_COMPLETENESS_THRESHOLD` | `70` | 完整度低于此值或有 risks 时,推优化卡 |
 
+## 📊 运营看板配置(Bitable 手工建)
+
+PR-C 自动写 `activity_log` 表(timestamp/actor/action/task_id/person_id/detail_json)。
+基于这张表 + 现有 task / person 表,在 Bitable 后台建以下视图:
+
+| 视图 | 数据源 | 配置 |
+| --- | --- | --- |
+| 本月活动流水 | `activity_log` | 按 `timestamp` 倒序;过滤 `timestamp >= 本月初` |
+| 候选人排行榜 | `person` | 按 `average_score` 降序;过滤 `total_tasks >= 1` |
+| 任务漏斗 | `task` | 按 `status` 分组(看板视图,推荐 Kanban) |
+| 工时偏差分析 | `task` | 列 `estimated_hours`(N1 估)对 `actual_hours`(实际),按差值绝对值降序 |
+
+`activity_log` 表会在应用首次启动时通过 `app/services/activity.py::create_activity_table_if_not_exists()` 自动建表。如需手工迁移历史数据,执行任意一次 `accept_task` / `pass_task` 写入即触发建表。
+
+候选人统计(`total_tasks` / `average_score` / `avg_hours_per_task`)在 `passed` 后通过 `app/services/stats.py::recompute_candidate_stats()` 异步重算(默认 2s 后台延迟),无需手工干预。
+
 ## 🚀 Fly.io 部署
 
 仓库已包含 `fly.toml`(单实例,APScheduler 在进程内,不能多机)。
