@@ -1,18 +1,195 @@
 import logging
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime, timedelta
 import json
+import re
+from app.config import settings
 from app.services.llm import llm_service
-from app.bitable import bitable_client
+from app.bitable import bitable_client, BitableClient
 
 logger = logging.getLogger(__name__)
 
+
+# Module-level wrapper singleton — pytest patches `app.services.match.bitable_wrapper`,
+# so reading it inside MatchService.__init__ lets tests inject a mock.
+bitable_wrapper = BitableClient()
+
+
 class MatchService:
     """人员匹配服务"""
-    
+
     def __init__(self):
         self.llm = llm_service
-        self.bitable = bitable_client
+        self.bitable = bitable_client  # legacy: low-level FeishuBitableClient
+        self.wrapper = bitable_wrapper  # new two-stage path uses the wrapper
+
+    # ------------------------------------------------------------------
+    # New two-stage matching API (issue #9)
+    # ------------------------------------------------------------------
+
+    async def two_stage_match(
+        self,
+        task_data: Dict[str, Any],
+        *,
+        mode: Optional[str] = None,
+        prefilter_limit: Optional[int] = None,
+        top_n: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Stage 1: prefilter_by_tags (pure Bitable, no LLM, ≤ prefilter_limit).
+        Stage 2: rerank_by_llm (Top-N + recommendation_reason).
+
+        - mode="simple": skip stage 2 entirely (zero LLM calls).
+        - mode="full" (default): run both stages.
+        - Empty stage-1 result → return [] without calling LLM.
+        """
+        mode = (mode or settings.match_mode).lower()
+        prefilter_limit = prefilter_limit or settings.match_prefilter_limit
+        top_n = top_n or settings.match_top_n
+
+        skills = task_data.get("skills") or task_data.get("skill_tags") or []
+        prefiltered = await self.prefilter_by_tags(skills, limit=prefilter_limit)
+
+        if not prefiltered:
+            logger.info("Stage 1 returned 0 candidates; skipping LLM rerank")
+            return []
+
+        if mode == "simple":
+            logger.info("MATCH_MODE=simple — returning top-%s by stage-1 score", top_n)
+            return prefiltered[:top_n]
+
+        return await self.rerank_by_llm(task_data, prefiltered, top_n=top_n)
+
+    async def prefilter_by_tags(
+        self,
+        required_skills: List[str],
+        *,
+        limit: int = 30,
+    ) -> List[Dict[str, Any]]:
+        """Bitable-only filter. Score = #matched_skills + small recency bonus.
+
+        Returns up to ``limit`` candidates with status=available, sorted by
+        prefilter_score desc.
+        """
+        try:
+            all_candidates = await self.wrapper.get_all_candidates()
+        except Exception as exc:
+            logger.error("prefilter_by_tags: get_all_candidates failed: %s", exc)
+            return []
+
+        required_set = {_norm_skill(s) for s in (required_skills or []) if s}
+        scored: List[Dict[str, Any]] = []
+
+        for cand in all_candidates:
+            if cand.get("status") and cand.get("status") != "available":
+                continue
+            cand_skills = {_norm_skill(s) for s in (cand.get("skill_tags") or []) if s}
+
+            if required_set:
+                matched = required_set & cand_skills
+                if not matched:
+                    continue
+                skill_score = len(matched) / max(1, len(required_set))
+            else:
+                skill_score = 0.5  # no required skills — everyone qualifies equally
+
+            # Light bonus for higher historical avg_score so ties break toward proven hires.
+            avg = float(cand.get("average_score") or 0)
+            score = round(skill_score * 100 + min(20.0, avg / 5.0), 2)
+
+            cand_copy = dict(cand)
+            cand_copy["prefilter_score"] = score
+            cand_copy["matched_skills"] = sorted(required_set & cand_skills) if required_set else []
+            scored.append(cand_copy)
+
+        scored.sort(key=lambda c: c["prefilter_score"], reverse=True)
+        return scored[:limit]
+
+    async def rerank_by_llm(
+        self,
+        task_data: Dict[str, Any],
+        candidates: List[Dict[str, Any]],
+        *,
+        top_n: int = 2,
+    ) -> List[Dict[str, Any]]:
+        """LLM-driven Top-N reranking. Each result includes recommendation_reason."""
+        if not candidates:
+            return []
+
+        system_prompt = self._build_match_system_prompt()
+        user_prompt = self._build_rerank_user_prompt(task_data, candidates, top_n=top_n)
+
+        try:
+            response = await self.llm.call(user_prompt, system_prompt)
+        except Exception as exc:
+            logger.warning("rerank_by_llm: LLM call failed: %s; using prefilter score", exc)
+            return candidates[:top_n]
+
+        parsed = self._parse_rerank_response(response, candidates)
+        if not parsed:
+            logger.info("rerank_by_llm: empty parsed result; falling back to prefilter order")
+            return candidates[:top_n]
+        return parsed[:top_n]
+
+    def _build_rerank_user_prompt(
+        self,
+        task_data: Dict[str, Any],
+        candidates: List[Dict[str, Any]],
+        *,
+        top_n: int,
+    ) -> str:
+        skills = task_data.get("skills") or task_data.get("skill_tags") or []
+        cand_lines = []
+        for c in candidates:
+            cand_lines.append(
+                f"- user_id={c.get('user_id', '')}, name={c.get('name', '')}, "
+                f"skills={c.get('skill_tags', [])}, avg_score={c.get('average_score', 0)}, "
+                f"prefilter_score={c.get('prefilter_score', 0)}"
+            )
+        return (
+            f"任务标题: {task_data.get('title', '')}\n"
+            f"任务描述: {task_data.get('description', '')}\n"
+            f"技能要求: {skills}\n"
+            f"截止时间: {task_data.get('deadline', '')}\n\n"
+            f"候选池({len(candidates)}人):\n" + "\n".join(cand_lines) + "\n\n"
+            f"请挑出最合适的 {top_n} 人。返回 JSON:\n"
+            "{\"matches\": [{\"user_id\": \"...\", \"match_score\": 0-100, "
+            "\"recommendation_reason\": \"...\"}]}\n"
+            "只返回 JSON。"
+        )
+
+    def _parse_rerank_response(
+        self,
+        response: str,
+        candidates: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        if not response:
+            return []
+        json_str = response
+        fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", response, re.DOTALL)
+        if fenced:
+            json_str = fenced.group(1)
+        else:
+            obj = re.search(r"\{.*\}", response, re.DOTALL)
+            if obj:
+                json_str = obj.group(0)
+
+        try:
+            data = json.loads(json_str)
+        except json.JSONDecodeError:
+            logger.warning("rerank_by_llm: invalid JSON; raw=%r", response[:200])
+            return []
+
+        by_id = {c.get("user_id"): c for c in candidates if c.get("user_id")}
+        result: List[Dict[str, Any]] = []
+        for m in data.get("matches", []):
+            uid = m.get("user_id")
+            if uid not in by_id:
+                continue
+            merged = dict(by_id[uid])
+            merged["match_score"] = int(m.get("match_score", 0))
+            merged["recommendation_reason"] = str(m.get("recommendation_reason", "")).strip()
+            result.append(merged)
+        return result
     
     async def find_top_candidates(self, task_data: Dict[str, Any], limit: int = 2) -> List[Dict[str, Any]]:
         """为任务找到Top-N候选人（默认Top-2）"""
@@ -209,6 +386,11 @@ class MatchService:
         except Exception as e:
             logger.error(f"计算匹配分数时出错: {str(e)}")
             return 50, "计算出错，使用默认分数"
+
+def _norm_skill(skill: Any) -> str:
+    """Case-insensitive skill normalization for set operations."""
+    return str(skill).strip().lower()
+
 
 # 创建全局实例
 match_service = MatchService()
