@@ -43,7 +43,7 @@ ignore = [
     "UP028",
     "UP032",
     "UP030",
-    "UP045",  # X | None vs Optional[X] — mixed legacy code
+    "UP038",  # isinstance(x, (A, B)) vs A | B — mixed legacy
     "I001",   # import sorting — already sorted in new modules; legacy sorted differently
     "F541",   # f-string without placeholder — fine for templates with newlines
     "F811",   # redefinition (legacy code intentionally redefines functions)
