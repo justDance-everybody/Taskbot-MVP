@@ -33,8 +33,40 @@
 - [本地部署](#本地部署)
 - [Docker部署](#docker部署)
 - [生产环境部署](#生产环境部署)
+- [Fly.io 部署](#flyio-部署)
 - [配置验证](#配置验证)
 - [故障排除](#故障排除)
+
+## ⚙️ 关键运行时配置
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `MATCH_MODE` | `full` | `simple` 只跑技能预筛(零 LLM 调用),`full` 走两阶段(预筛 + LLM 重排) |
+| `MATCH_PREFILTER_LIMIT` | `30` | 预筛阶段返回候选人数上限 |
+| `MATCH_TOP_N` | `2` | 最终推荐 Top-N |
+| `PRD_PARSE_TIMEOUT_SECONDS` | `30` | `/quicktask` LLM 解析超时;超时后回退到 `/newtask` 表单 |
+| `PRD_COMPLETENESS_THRESHOLD` | `70` | 完整度低于此值或有 risks 时,推优化卡 |
+
+## 🚀 Fly.io 部署
+
+仓库已包含 `fly.toml`(单实例,APScheduler 在进程内,不能多机)。
+
+```bash
+# 首次部署
+fly auth login
+fly launch --copy-config --yes        # 复制现有 fly.toml
+fly secrets set FEISHU_APP_ID=... FEISHU_APP_SECRET=... \
+                FEISHU_VERIFY_TOKEN=... FEISHU_BITABLE_APP_TOKEN=... \
+                FEISHU_TASK_TABLE_ID=... FEISHU_PERSON_TABLE_ID=... \
+                DEEPSEEK_KEY=...
+fly deploy
+
+# 验证健康
+curl https://<your-app>.fly.dev/health
+# 期望: {"status":"healthy"}
+```
+
+后续滚动发布:`fly deploy`。回滚:`fly releases` + `fly deploy --image <prior-image>`。
 
 ## 🔧 环境要求
 
