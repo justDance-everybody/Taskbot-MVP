@@ -66,12 +66,14 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
-      - name: Run unit tests with coverage gate
+      - name: Run all tests with coverage gate
         # Gate at 70% as a realistic baseline given the legacy
         # webhooks.py / bitable.py monoliths (omitted in pyproject.toml).
         # Target ratchets up as those files are refactored in subsequent PRs.
+        # Includes integration tests so the assign / qa / feishu_im
+        # modules (which only have integration coverage) count.
         run: |
-          pytest tests/unit/ -v \
+          pytest tests/ -v \
             --cov=app \
             --cov-report=term-missing \
             --cov-report=xml \
