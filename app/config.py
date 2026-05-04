@@ -53,6 +53,12 @@ class Settings(BaseSettings):
     reject_fallback_seconds: int = 5
     idempotency_ttl_hours: int = 24
     idempotency_db_path: str = "/tmp/taskbot_idempotency.sqlite3"
+
+    # PR-D: 主动追踪 + AI 预验收 + 修订循环
+    proactive_scan_interval_hours: int = 6
+    auto_verify_threshold: int = 4   # 5 分制,>= 该值自动 merge
+    max_revisions: int = 3           # 修订上限,超过升级 HR
+    progress_idle_grace_hours: int = 24  # 近 24h 有进度则跳过催办
     
     model_config = {
         "env_file": ".env",
