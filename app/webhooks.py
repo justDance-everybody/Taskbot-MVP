@@ -1660,7 +1660,11 @@ async def _process_text_command(user_id: str, text: str, chat_id: str = None):
         elif text.startswith("/tasks"):
             # 任务列表命令
             await handle_tasks_list_command(user_id, text, chat_id)
-        
+
+        elif text.startswith("/quicktask"):
+            # 快速任务发布:粘贴 PRD,LLM 解析,LLM 超时则回退到 /newtask 表单流
+            await handle_quicktask_command(user_id, text, chat_id)
+
         elif text.startswith("/assign"):
             # 手动分配任务命令
             await handle_assign_task_command(user_id, text, chat_id)
@@ -1772,6 +1776,84 @@ async def _handle_github_issues(event_data: Dict[str, Any]):
         
     except Exception as e:
         logger.error(f"Error handling GitHub issues: {str(e)}")
+
+async def handle_quicktask_command(user_id: str, text: str, chat_id: str = None):
+    """``/quicktask <PRD>`` — paste-to-task flow.
+
+    Pipeline:
+    1. Strip leading ``/quicktask`` keyword from the text.
+    2. Run :class:`~app.services.prd_parser.PRDParser`.
+    3. ``needs_fallback`` (LLM timeout / invalid response): route to the
+       existing interactive ``handle_new_task_command`` form so the user
+       isn't blocked.
+    4. ``needs_optimization`` (completeness < threshold OR risks present):
+       reply with an optimization summary and bail — HR fixes the PRD then
+       re-runs ``/quicktask``.
+    5. Otherwise: reply with the parsed structure preview and instruct the
+       user to confirm via ``/newtask``. (Auto-publish loop is intentionally
+       deferred to PR-B's IM card flow.)
+    """
+    from app.services.prd_parser import PRDParser
+
+    raw = text.strip()
+    body = raw.split(" ", 1)[1].strip() if " " in raw else ""
+    if not body:
+        await feishu_service.send_text_message(
+            user_id=user_id,
+            text=(
+                "用法: /quicktask <粘贴你的需求描述>\n"
+                "例: /quicktask 需要 Python 脚本,定时从飞书多维表格读数据生成日报,5月15日前交付"
+            ),
+            chat_id=chat_id,
+        )
+        return
+
+    parsed = await PRDParser().parse(body)
+
+    if parsed.needs_fallback:
+        await feishu_service.send_text_message(
+            user_id=user_id,
+            text=f"⚠️ PRD 自动解析未完成({parsed.fallback_reason}),已切换到表单流程。",
+            chat_id=chat_id,
+        )
+        await handle_new_task_command(user_id, body, chat_id)
+        return
+
+    if parsed.needs_optimization:
+        risks_block = "\n".join(f"- {r}" for r in parsed.risks) or "- (无明确风险)"
+        suggestions_block = "\n".join(f"- {s}" for s in parsed.suggestions) or "- (LLM 未给出建议)"
+        await feishu_service.send_text_message(
+            user_id=user_id,
+            text=(
+                f"📝 PRD 解析完成,但需要优化:\n\n"
+                f"完整度: {parsed.completeness}/100\n"
+                f"标题: {parsed.title or '(缺失)'}\n"
+                f"技能: {', '.join(parsed.skills) or '(缺失)'}\n"
+                f"截止: {parsed.deadline or '(缺失)'}\n"
+                f"工时估计: {parsed.estimated_hours[0]}-{parsed.estimated_hours[1]} 小时\n\n"
+                f"⚠️ 风险:\n{risks_block}\n\n"
+                f"💡 建议补充:\n{suggestions_block}\n\n"
+                f"补全后重新执行 /quicktask 即可。"
+            ),
+            chat_id=chat_id,
+        )
+        return
+
+    await feishu_service.send_text_message(
+        user_id=user_id,
+        text=(
+            f"✅ PRD 解析完成,准备发布:\n\n"
+            f"标题: {parsed.title}\n"
+            f"技能: {', '.join(parsed.skills)}\n"
+            f"截止: {parsed.deadline}\n"
+            f"描述: {parsed.description}\n"
+            f"工时: {parsed.estimated_hours[0]}-{parsed.estimated_hours[1]} 小时\n"
+            f"完整度: {parsed.completeness}/100\n\n"
+            f"确认无误后用 /newtask 走标准发布流程。"
+        ),
+        chat_id=chat_id,
+    )
+
 
 async def handle_new_task_command(user_id: str, text_content: str, chat_id: str = None):
     """处理@bot新任务命令"""
